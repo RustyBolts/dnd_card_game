@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DND Card Game</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <main id="app">
+      <section class="topbar">
+        <div>
+          <h1>DND Card Game</h1>
+          <p id="connection-status">Offline</p>
+        </div>
+        <form id="connect-form" class="connect-form">
+          <label>
+            Player
+            <input id="player-name" name="playerName" value="Player" autocomplete="off" />
+          </label>
+          <label>
+            Room
+            <input id="room-id" name="roomId" value="main" autocomplete="off" />
+          </label>
+          <label class="wide">
+            Worker WS
+            <input id="worker-url" name="workerUrl" autocomplete="off" />
+          </label>
+          <button type="submit">Connect</button>
+        </form>
+      </section>
+
+      <section class="table">
+        <aside class="panel">
+          <h2>Players</h2>
+          <div id="players"></div>
+        </aside>
+
+        <section class="play-area">
+          <div class="turn-strip">
+            <span id="game-status">WAITING</span>
+            <strong id="turn-label">Turn 0</strong>
+            <span id="current-player">Current: none</span>
+          </div>
+
+          <div class="actions">
+            <button id="ready-button" type="button">Ready</button>
+            <button id="draw-button" type="button">Draw</button>
+            <button id="end-button" type="button">End Turn</button>
+          </div>
+
+          <div class="target-row">
+            <label>
+              Target
+              <select id="target-select"></select>
+            </label>
+          </div>
+
+          <div>
+            <h2>Hand</h2>
+            <div id="hand" class="hand"></div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <h2>Log</h2>
+          <ol id="event-log"></ol>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

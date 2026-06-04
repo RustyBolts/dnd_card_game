@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["./**/*.ts", "../src/shared/**/*.ts", "../src/host/CommandError.ts", "../src/host/CommandRouter.ts", "../src/host/CommandValidator.ts", "../src/host/DeckManager.ts", "../src/host/GameStateStore.ts", "../src/host/SnapshotService.ts"]
+}

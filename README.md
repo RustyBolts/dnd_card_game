@@ -68,6 +68,51 @@ npm test
 npm run build
 ```
 
+## Cloudflare Worker CI/CD
+
+Cloudflare Worker 後端使用 Durable Object 保存單一房間的權威狀態與 WebSocket 連線。
+
+在 Cloudflare 建立 Worker 時使用：
+
+```txt
+Project name: dnd-card-game-api
+Production branch: main
+Root directory: /
+Build command: npm run build
+Deploy command: npx wrangler deploy
+```
+
+注意：Worker 名稱請使用 `dnd-card-game-api`，不要使用 `dnd_card_game`，因為 Wrangler/Workers 名稱不建議使用底線。
+
+本機驗證：
+
+```bash
+npm run build:worker
+npx wrangler deploy --dry-run
+```
+
+## Cloudflare Pages CI/CD
+
+Cloudflare Pages 前端位於 `web/`，部署時連到同一個 GitHub repo。
+
+Pages 設定：
+
+```txt
+Project name: dnd-card-game
+Production branch: main
+Root directory: /
+Build command: npm run build:pages
+Build output directory: web/dist
+```
+
+建議在 Pages 環境變數加入 Worker WebSocket URL：
+
+```txt
+VITE_WORKER_WS_URL=wss://<your-worker-domain>/ws
+```
+
+若未設定，前端會預設使用同網域 `/ws`，也可以在畫面上的 Worker WS 欄位手動貼上 Worker URL。
+
 ## 專案結構
 
 ```txt
@@ -78,6 +123,8 @@ src/
     types/
   host/
   client/
+worker/
+web/
 tests/
 docs/
 ```

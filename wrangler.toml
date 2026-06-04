@@ -1,0 +1,15 @@
+name = "dnd-card-game-api"
+main = "worker/index.ts"
+compatibility_date = "2026-06-04"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "GAME_ROOMS"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoom"]

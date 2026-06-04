@@ -61,12 +61,12 @@ export class CommandValidator {
       return JSON.parse(rawMessage);
     }
 
-    if (Buffer.isBuffer(rawMessage)) {
-      return JSON.parse(rawMessage.toString("utf8"));
+    if (ArrayBuffer.isView(rawMessage)) {
+      return JSON.parse(new TextDecoder().decode(rawMessage));
     }
 
     if (rawMessage instanceof ArrayBuffer) {
-      return JSON.parse(Buffer.from(rawMessage).toString("utf8"));
+      return JSON.parse(new TextDecoder().decode(rawMessage));
     }
 
     return rawMessage;
