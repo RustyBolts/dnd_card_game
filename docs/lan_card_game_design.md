@@ -1,0 +1,422 @@
+# Wi-Fi LAN 回合制卡牌桌遊設計文件
+
+## 1. 專案目標
+
+建立一款可在同一 Wi-Fi 區域網路內遊玩的回合制卡牌桌遊。
+
+一名玩家作為 Host，負責主持遊戲與保存權威狀態。其他玩家作為 Client 加入房間，透過 WebSocket 與 Host 溝通。
+
+---
+
+## 2. 系統拓樸
+
+```txt
+Client A ── Command ──▶
+Client B ── Command ──▶ Host Server ── Event / Snapshot ──▶ All Clients
+Client C ── Command ──▶
+```
+
+Host 是唯一可以改變 GameState 的端點。
+
+---
+
+## 3. 通訊協定
+
+## 3.1 MVP 使用 WebSocket
+
+原因：
+
+- 回合制遊戲不需要 UDP 的極低延遲。
+- WebSocket 雙向通訊簡單。
+- 容易除錯。
+- 適合 JSON 訊息。
+- 能快速建立原型。
+
+## 3.2 HTTP 可選
+
+HTTP 可用於：
+
+- 建立房間。
+- 查詢房間資訊。
+- 下載卡牌定義。
+- 讀取玩家設定。
+
+但 MVP 可以先省略 HTTP，直接用 WebSocket 完成所有流程。
+
+---
+
+## 4. 訊息格式
+
+所有訊息建議使用統一格式：
+
+```ts
+type NetworkMessage = {
+  type: string
+  requestId?: string
+  seq?: number
+  playerId?: string
+  roomId?: string
+  payload?: unknown
+  error?: {
+    code: string
+    message: string
+  }
+}
+```
+
+---
+
+## 5. Command 設計
+
+Command 是 Client 傳給 Host 的玩家意圖。
+
+### JOIN_ROOM
+
+```json
+{
+  "type": "JOIN_ROOM",
+  "requestId": "req_001",
+  "payload": {
+    "playerName": "Player A"
+  }
+}
+```
+
+### PLAYER_READY
+
+```json
+{
+  "type": "PLAYER_READY",
+  "requestId": "req_002"
+}
+```
+
+### DRAW_CARD
+
+```json
+{
+  "type": "DRAW_CARD",
+  "requestId": "req_003"
+}
+```
+
+### PLAY_CARD
+
+```json
+{
+  "type": "PLAY_CARD",
+  "requestId": "req_004",
+  "payload": {
+    "cardInstanceId": "card_inst_001",
+    "targetId": "p2"
+  }
+}
+```
+
+### DISCARD_CARD
+
+```json
+{
+  "type": "DISCARD_CARD",
+  "requestId": "req_005",
+  "payload": {
+    "cardInstanceId": "card_inst_001"
+  }
+}
+```
+
+### END_TURN
+
+```json
+{
+  "type": "END_TURN",
+  "requestId": "req_006"
+}
+```
+
+---
+
+## 6. Event 設計
+
+Event 是 Host 廣播給所有 Client 的遊戲事實。
+
+### PLAYER_JOINED
+
+```json
+{
+  "type": "PLAYER_JOINED",
+  "seq": 1,
+  "payload": {
+    "playerId": "p1",
+    "playerName": "Player A"
+  }
+}
+```
+
+### GAME_STARTED
+
+```json
+{
+  "type": "GAME_STARTED",
+  "seq": 2,
+  "payload": {
+    "firstPlayerId": "p1"
+  }
+}
+```
+
+### CARD_DRAWN
+
+注意：對其他玩家不應公開抽到的卡牌內容。
+
+```json
+{
+  "type": "CARD_DRAWN",
+  "seq": 3,
+  "payload": {
+    "playerId": "p1",
+    "cardInstanceId": "card_inst_001",
+    "privateCardData": {
+      "cardId": "fireball"
+    }
+  }
+}
+```
+
+實作時可對不同玩家送不同 payload：
+
+- 抽牌者收到 cardId。
+- 其他玩家只收到手牌數增加。
+
+### CARD_PLAYED
+
+```json
+{
+  "type": "CARD_PLAYED",
+  "seq": 4,
+  "payload": {
+    "playerId": "p1",
+    "cardInstanceId": "card_inst_001",
+    "cardId": "fireball",
+    "targetId": "p2"
+  }
+}
+```
+
+### DAMAGE_APPLIED
+
+```json
+{
+  "type": "DAMAGE_APPLIED",
+  "seq": 5,
+  "payload": {
+    "sourceId": "card_inst_001",
+    "targetId": "p2",
+    "amount": 3,
+    "hpAfter": 17
+  }
+}
+```
+
+### TURN_STARTED
+
+```json
+{
+  "type": "TURN_STARTED",
+  "seq": 6,
+  "payload": {
+    "playerId": "p2",
+    "turn": 2
+  }
+}
+```
+
+### GAME_STATE_SYNC
+
+```json
+{
+  "type": "GAME_STATE_SYNC",
+  "seq": 7,
+  "payload": {
+    "state": {}
+  }
+}
+```
+
+---
+
+## 7. GameState 設計
+
+```ts
+type GameState = {
+  roomId: string
+  status: 'WAITING' | 'PLAYING' | 'ENDED'
+  turn: number
+  currentPlayerId: string | null
+  players: Record<string, PlayerState>
+  zones: {
+    deck: Record<string, CardInstance[]>
+    hand: Record<string, CardInstance[]>
+    board: CardInstance[]
+    graveyard: CardInstance[]
+    exile: CardInstance[]
+  }
+  eventSeq: number
+}
+```
+
+---
+
+## 8. PlayerState
+
+```ts
+type PlayerState = {
+  playerId: string
+  name: string
+  hp: number
+  energy: number
+  maxEnergy: number
+  connected: boolean
+  ready: boolean
+}
+```
+
+---
+
+## 9. Card Definition
+
+```ts
+type CardDefinition = {
+  cardId: string
+  name: string
+  cost: number
+  type: 'ATTACK' | 'SKILL' | 'ITEM' | 'STATUS'
+  effect: CardEffectDefinition
+}
+```
+
+---
+
+## 10. Card Instance
+
+```ts
+type CardInstance = {
+  instanceId: string
+  cardId: string
+  ownerId: string
+  zone: 'DECK' | 'HAND' | 'BOARD' | 'GRAVEYARD' | 'EXILE'
+}
+```
+
+---
+
+## 11. 卡牌效果解析
+
+第一版可先支援三種效果：
+
+```ts
+type CardEffectDefinition =
+  | { type: 'DAMAGE'; value: number }
+  | { type: 'HEAL'; value: number }
+  | { type: 'DRAW'; count: number }
+```
+
+解析流程：
+
+```txt
+PLAY_CARD Command
+ → 驗證卡牌存在於手牌
+ → 驗證費用
+ → 移動卡牌到棄牌區或場上
+ → 解析效果
+ → 產生 CARD_PLAYED Event
+ → 產生 DAMAGE_APPLIED / HEAL_APPLIED / CARD_DRAWN Event
+```
+
+---
+
+## 12. 回合流程
+
+```txt
+TURN_STARTED
+ → 恢復能量
+ → 抽牌
+ → 玩家操作階段
+ → END_TURN
+ → TURN_ENDED
+ → 下一位玩家 TURN_STARTED
+```
+
+MVP 可簡化為：
+
+```txt
+回合開始自動抽 1 張
+玩家可以出任意合法卡
+玩家按結束回合
+```
+
+---
+
+## 13. 隱私資料處理
+
+卡牌遊戲需要注意「手牌、牌庫」是私有資訊。
+
+Host 保存完整資料。
+
+Client 只收到自己能看的資料。
+
+例如：
+
+- 自己的手牌：看得到 cardId。
+- 對手手牌：只看得到數量。
+- 牌庫：只看得到剩餘張數。
+- 棄牌區：通常公開。
+
+---
+
+## 14. 斷線與重連
+
+MVP 可先採用：
+
+- 玩家斷線後標記 connected = false。
+- Host 不立即移除玩家。
+- 玩家重新連線時使用 playerId 或 reconnectToken。
+- Host 發送 GAME_STATE_SYNC。
+
+---
+
+## 15. 房間發現
+
+MVP：手動輸入 Host IP + Port。
+
+第二階段：UDP Broadcast。
+
+Host 每秒廣播：
+
+```json
+{
+  "type": "ROOM_DISCOVERY",
+  "roomName": "Local Card Room",
+  "ip": "192.168.1.23",
+  "port": 7777
+}
+```
+
+Client 掃描後顯示房間列表。
+
+---
+
+## 16. MVP 完成標準
+
+一版可玩原型需達成：
+
+1. Host 可以啟動服務。
+2. Client 可以透過 IP 加入。
+3. 至少兩名玩家能看到彼此。
+4. Host 可以開始遊戲。
+5. 玩家有手牌。
+6. 玩家能抽卡。
+7. 玩家能出卡。
+8. 出卡能造成效果。
+9. 回合能輪替。
+10. 所有 Client 顯示一致狀態。

@@ -1,0 +1,24 @@
+{
+  "name": "dnd_card_game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wi-Fi LAN host-authoritative turn-based card game prototype.",
+  "scripts": {
+    "dev:host": "tsx src/host/runHost.ts",
+    "dev:client": "tsx src/client/runClient.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3",
+    "vitest": "^1.6.0"
+  }
+}
