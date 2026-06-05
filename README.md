@@ -135,3 +135,6 @@ docs/
 - `CardInstance` 是對戰中實際存在的一張卡，所有操作都使用 `instanceId`。
 - 隨機結果由 Host 產生，例如洗牌與抽牌。
 - Client 不直接推測結果，只接受 Host event / snapshot。
+
+## 更新
+2026/06/05 完成首次網頁部署
