@@ -68,6 +68,10 @@ npm test
 npm run build
 ```
 
+## Agent / 開發流程
+
+專案根目錄的 `AGENTS.md` 定義了後續 agent 與開發者應遵守的工作流程、Cloudflare CI/CD 驗證、Vue 3 前端方向、互動效果套件建議與 TypeScript 架構規範。進行功能開發前請先閱讀該文件。
+
 ## Cloudflare Worker CI/CD
 
 Cloudflare Worker 後端使用 Durable Object 保存單一房間的權威狀態與 WebSocket 連線。
