@@ -1,4 +1,5 @@
 import { HostServer } from "./HostServer.js";
+import { loadCardCatalogForHost } from "./CardCatalogLoader.js";
 
 const args = new Map<string, string>();
 for (let index = 2; index < process.argv.length; index += 2) {
@@ -11,8 +12,13 @@ for (let index = 2; index < process.argv.length; index += 2) {
 
 const port = Number(args.get("port") ?? process.env.PORT ?? 7777);
 const host = args.get("host") ?? process.env.HOST;
+const cardCatalog = loadCardCatalogForHost({
+  cardsCsvPath: args.get("cards-csv"),
+  starterDeckCsvPath: args.get("starter-deck-csv"),
+  version: args.get("card-catalog-version")
+});
 
-const server = new HostServer({ host, port });
+const server = new HostServer({ host, port, cardCatalog });
 server.start();
 
 process.on("SIGINT", () => {

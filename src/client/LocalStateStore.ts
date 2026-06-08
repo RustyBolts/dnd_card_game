@@ -7,6 +7,7 @@ export class LocalStateStore {
   roomId: string | null = null;
   state: VisibleGameState | null = null;
   cardDefinitions: Record<string, CardDefinition> = {};
+  cardCatalogVersion: string | null = null;
   readonly eventLog: GameEvent[] = [];
 
   apply(event: GameEvent): void {
@@ -21,6 +22,7 @@ export class LocalStateStore {
     if (event.type === "GAME_STATE_SYNC") {
       this.state = event.payload.state;
       this.cardDefinitions = event.payload.cardDefinitions;
+      this.cardCatalogVersion = event.payload.cardCatalogVersion;
     }
   }
 }

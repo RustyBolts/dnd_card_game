@@ -6,6 +6,10 @@ workers_dev = true
 [observability]
 enabled = true
 
+[vars]
+CARD_CARDS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTjZ6vCBGnVnho6axFA6mJTF2NpWL03IOSLF9Rhwittqq7HTgm3H4uieQZpwD6gSd9nhjjN3kG7TFPe/pub?gid=1807538627&single=true&output=csv"
+CARD_STARTER_DECK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSH4wENeYTIOHnq__L915jqBxrapbKye_qRcmYLCKarn66QMRJ_T02ES2X1nmwRp6fsSbxKiRQaRQcI/pub?gid=0&single=true&output=csv"
+
 [[durable_objects.bindings]]
 name = "GAME_ROOMS"
 class_name = "GameRoom"
@@ -13,3 +17,7 @@ class_name = "GameRoom"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GameRoom"]
+
+[[kv_namespaces]]
+binding = "CARD_CATALOG_KV"
+id = "26387ec714d7432890fe1fc717ac6705"

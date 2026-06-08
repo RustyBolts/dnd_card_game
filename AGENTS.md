@@ -24,6 +24,8 @@ Read this file before making changes. Keep changes scoped, runnable, and ready f
 
 - The Host/Worker is authoritative. Clients send commands only; clients must not directly mutate game results.
 - Shared protocol and game types live under `src/shared/`. Update shared types before changing commands, events, or state shape.
+- Card catalog data may be loaded externally, but only the Host/Worker may use it to resolve gameplay. Clients must not read external card data to apply effects locally.
+- Active games should lock a catalog version when the room starts or initializes. Do not hot-reload card definitions into an active match unless the protocol explicitly supports version migration.
 - Gameplay results must be represented as events, for example `CARD_PLAYED`, `DAMAGE_APPLIED`, `TURN_STARTED`, and `GAME_STATE_SYNC`.
 - Preserve private card information. Opponent hand contents and deck contents must not leak through snapshots or events.
 - The Worker Durable Object owns online game room state for Cloudflare deployment.
@@ -60,6 +62,20 @@ Build command: npm run build
 Deploy command: npx wrangler deploy
 ```
 
+Optional external card catalog settings:
+
+```txt
+KV binding: CARD_CATALOG_KV
+Variables:
+  CARD_CARDS_CSV_URL=<published cards CSV URL>
+  CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_CATALOG_KEY=card-catalog:active
+Secret:
+  CARD_CATALOG_ADMIN_TOKEN
+```
+
+If Worker variables are managed in the Cloudflare dashboard, deploy with `npx wrangler deploy --keep-vars` so Wrangler does not delete dashboard-managed vars.
+
 Pages project:
 
 ```txt
@@ -82,6 +98,7 @@ Do not hard-code production Worker URLs in source when an environment variable i
 ## Validation Checklist
 
 - Shared/game protocol changed: update tests and run `npm run build && npm test`.
+- Card catalog parser or data source changed: update parser tests and `docs/card_catalog_external_data.md`. `data/` is ignored and should only be used for local CSV scratch files.
 - Worker changed: run `npm run build:worker` and `npx wrangler deploy --dry-run`.
 - Frontend changed: run `npm run build:pages` and manually check connection, ready, draw, play, discard, and end-turn flows.
 - UI interaction changed: test at least one desktop viewport and one mobile-sized viewport.

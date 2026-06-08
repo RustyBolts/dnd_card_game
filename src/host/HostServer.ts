@@ -5,21 +5,27 @@ import { CommandRouter } from "./CommandRouter.js";
 import { CommandValidator } from "./CommandValidator.js";
 import { EventBroadcaster } from "./EventBroadcaster.js";
 import { GameStateStore } from "./GameStateStore.js";
+import type { CardCatalog } from "../shared/types/cardCatalog.js";
 
 export type HostServerOptions = {
   host?: string;
   port: number;
+  cardCatalog?: CardCatalog;
 };
 
 export class HostServer {
-  private readonly store = new GameStateStore();
+  private readonly store: GameStateStore;
   private readonly validator = new CommandValidator();
-  private readonly router = new CommandRouter(this.store);
+  private readonly router: CommandRouter;
   private readonly connections = new Map<WebSocket, string>();
-  private readonly broadcaster = new EventBroadcaster(this.store, () => this.connections.entries());
+  private readonly broadcaster: EventBroadcaster;
   private server: WebSocketServer | null = null;
 
-  constructor(private readonly options: HostServerOptions) {}
+  constructor(private readonly options: HostServerOptions) {
+    this.store = new GameStateStore(undefined, options.cardCatalog);
+    this.router = new CommandRouter(this.store);
+    this.broadcaster = new EventBroadcaster(this.store, () => this.connections.entries());
+  }
 
   start(): void {
     this.server = new WebSocketServer({

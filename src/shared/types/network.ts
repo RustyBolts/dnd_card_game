@@ -183,6 +183,7 @@ export type GameStateSyncEvent = {
   payload: {
     state: VisibleGameState;
     cardDefinitions: Record<string, CardDefinition>;
+    cardCatalogVersion: string;
   };
 };
 

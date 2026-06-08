@@ -4,8 +4,10 @@ import { STARTER_DECK_CARD_IDS } from "../shared/rules/cardDefinitions.js";
 export class DeckManager {
   private nextCardNumber = 1;
 
+  constructor(private readonly starterDeckCardIds: readonly string[] = STARTER_DECK_CARD_IDS) {}
+
   buildStarterDeck(playerId: string): CardInstance[] {
-    return STARTER_DECK_CARD_IDS.map((cardId) => ({
+    return this.starterDeckCardIds.map((cardId) => ({
       instanceId: `card_${this.nextCardNumber++}`,
       cardId,
       ownerId: playerId,

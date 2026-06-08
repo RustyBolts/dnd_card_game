@@ -68,6 +68,25 @@ npm test
 npm run build
 ```
 
+## 卡片資料來源
+
+卡片資料已外部化為 card catalog。Cloudflare Worker 會從 Google Spreadsheet 發布出的 CSV URL 同步到 KV，遊戲房間再從 KV 讀取 active catalog。
+
+Node host 可選擇讀取本機 CSV：
+
+```txt
+data/cards.csv
+data/starter_deck.csv
+```
+
+這兩個 CSV 只是本機測試或上傳 Google Spreadsheet 時的暫存資料，`data/` 已加入 `.gitignore`，不是正式 runtime 依賴。若本機沒有這兩個檔案，Node host 會 fallback 到程式內建的 default catalog。
+
+詳細流程請看：
+
+```txt
+docs/card_catalog_external_data.md
+```
+
 ## Agent / 開發流程
 
 專案根目錄的 `AGENTS.md` 定義了後續 agent 與開發者應遵守的工作流程、Cloudflare CI/CD 驗證、Vue 3 前端方向、互動效果套件建議與 TypeScript 架構規範。進行功能開發前請先閱讀該文件。
@@ -93,6 +112,32 @@ Deploy command: npx wrangler deploy
 ```bash
 npm run build:worker
 npx wrangler deploy --dry-run
+```
+
+若啟用外部卡片資料，Worker 需要額外設定：
+
+```txt
+KV binding: CARD_CATALOG_KV
+Variables:
+  CARD_CARDS_CSV_URL=<published cards CSV URL>
+  CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_CATALOG_KEY=card-catalog:active
+Secret:
+  CARD_CATALOG_ADMIN_TOKEN
+```
+
+`CARD_CATALOG_KEY` 可省略，未設定時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
+
+```bash
+npx wrangler deploy --keep-vars
+```
+
+同步卡表：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <CARD_CATALOG_ADMIN_TOKEN>" \
+  https://<worker-domain>/api/admin/card-catalog/sync
 ```
 
 ## Cloudflare Pages CI/CD
@@ -142,3 +187,4 @@ docs/
 
 ## 更新
 2026/06/05 完成首次網頁部署
+2026/06/08 資料讀入改用 cloudflare kv 暫存

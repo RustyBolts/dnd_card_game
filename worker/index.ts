@@ -3,9 +3,19 @@ import { CommandRouter } from "../src/host/CommandRouter.js";
 import { CommandValidator } from "../src/host/CommandValidator.js";
 import { GameStateStore } from "../src/host/GameStateStore.js";
 import type { GameCommand, GameEvent, NetworkMessage } from "../src/shared/types/network.js";
+import {
+  loadWorkerCardCatalog,
+  syncWorkerCardCatalog,
+  type WorkerCardCatalogResult
+} from "./cardCatalog.js";
 
 export type Env = {
   GAME_ROOMS: DurableObjectNamespace;
+  CARD_CATALOG_KV?: KVNamespace;
+  CARD_CATALOG_KEY?: string;
+  CARD_CARDS_CSV_URL?: string;
+  CARD_STARTER_DECK_CSV_URL?: string;
+  CARD_CATALOG_ADMIN_TOKEN?: string;
 };
 
 export default {
@@ -18,6 +28,30 @@ export default {
 
     if (url.pathname === "/api/health") {
       return json({ status: "ok", service: "dnd-card-game-api" });
+    }
+
+    if (url.pathname === "/api/card-catalog" && request.method === "GET") {
+      const result = await loadWorkerCardCatalog(env);
+      return json(cardCatalogResponse(result));
+    }
+
+    if (url.pathname === "/api/admin/card-catalog/sync" && request.method === "POST") {
+      const authError = authorizeAdmin(request, env);
+      if (authError) {
+        return authError;
+      }
+
+      try {
+        const catalog = await syncWorkerCardCatalog(env);
+        return json({
+          status: "ok",
+          version: catalog.version,
+          cardCount: Object.keys(catalog.cardDefinitions).length,
+          starterDeckSize: catalog.starterDeckCardIds.length
+        });
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "Unable to sync card catalog." }, 500);
+      }
     }
 
     if (url.pathname === "/ws") {
@@ -33,31 +67,36 @@ export default {
     return json({
       service: "dnd-card-game-api",
       websocket: "/ws?room=main",
-      health: "/api/health"
+      health: "/api/health",
+      cardCatalog: "/api/card-catalog",
+      syncCardCatalog: "/api/admin/card-catalog/sync"
     });
   }
 };
 
-export class GameRoom {
-  private readonly store: GameStateStore;
-  private readonly validator = new CommandValidator();
-  private readonly router: CommandRouter;
-  private readonly connections = new Map<WebSocket, string>();
+type GameRoomRuntime = {
+  store: GameStateStore;
+  router: CommandRouter;
+};
 
-  constructor(_state: DurableObjectState, _env: Env) {
-    this.store = new GameStateStore("cloudflare_room");
-    this.router = new CommandRouter(this.store);
-  }
+export class GameRoom {
+  private readonly validator = new CommandValidator();
+  private readonly connections = new Map<WebSocket, string>();
+  private runtime: GameRoomRuntime | null = null;
+  private runtimePromise: Promise<GameRoomRuntime> | null = null;
+
+  constructor(_state: DurableObjectState, private readonly env: Env) {}
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return json({ error: "Expected a WebSocket upgrade request." }, 426);
     }
 
+    const runtime = await this.ensureRuntime();
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    this.acceptConnection(server);
+    this.acceptConnection(server, runtime.store);
 
     return new Response(null, {
       status: 101,
@@ -65,12 +104,45 @@ export class GameRoom {
     });
   }
 
-  private acceptConnection(socket: WebSocket): void {
+  private async ensureRuntime(): Promise<GameRoomRuntime> {
+    if (this.runtime) {
+      if (this.shouldRefreshIdleRuntime(this.runtime)) {
+        this.runtimePromise = null;
+        this.runtime = null;
+      } else {
+        return this.runtime;
+      }
+    }
+
+    if (this.runtime) {
+      return this.runtime;
+    }
+
+    this.runtimePromise ??= this.createRuntime();
+    this.runtime = await this.runtimePromise;
+    return this.runtime;
+  }
+
+  private async createRuntime(): Promise<GameRoomRuntime> {
+    const { catalog } = await loadWorkerCardCatalog(this.env);
+    const store = new GameStateStore("cloudflare_room", catalog);
+
+    return {
+      store,
+      router: new CommandRouter(store)
+    };
+  }
+
+  private shouldRefreshIdleRuntime(runtime: GameRoomRuntime): boolean {
+    return this.connections.size === 0 && runtime.store.getState().status === "WAITING";
+  }
+
+  private acceptConnection(socket: WebSocket, store: GameStateStore): void {
     socket.accept();
     this.send(socket, {
       type: "ROOM_INFO",
       payload: {
-        roomId: this.store.getState().roomId,
+        roomId: store.getState().roomId,
         message: "Send JOIN_ROOM with { playerName } to join."
       }
     });
@@ -96,8 +168,10 @@ export class GameRoom {
     }
 
     try {
+      const runtime = await this.ensureRuntime();
+
       if (command.type === "JOIN_ROOM") {
-        this.handleJoin(socket, command);
+        this.handleJoin(socket, command, runtime);
         return;
       }
 
@@ -106,7 +180,7 @@ export class GameRoom {
         throw new CommandError("NOT_JOINED", "Join the room before sending gameplay commands.");
       }
 
-      const events = this.router.handlePlayerCommand(playerId, command);
+      const events = runtime.router.handlePlayerCommand(playerId, command);
       this.broadcast(events);
       this.broadcastSnapshots();
     } catch (error) {
@@ -114,12 +188,16 @@ export class GameRoom {
     }
   }
 
-  private handleJoin(socket: WebSocket, command: Extract<GameCommand, { type: "JOIN_ROOM" }>): void {
+  private handleJoin(
+    socket: WebSocket,
+    command: Extract<GameCommand, { type: "JOIN_ROOM" }>,
+    runtime: GameRoomRuntime
+  ): void {
     if (this.connections.has(socket)) {
       throw new CommandError("ALREADY_JOINED", "This connection already joined the room.");
     }
 
-    const result = this.router.handleJoin(command);
+    const result = runtime.router.handleJoin(command);
     this.connections.set(socket, result.player.playerId);
 
     for (const event of result.privateEvents) {
@@ -134,8 +212,8 @@ export class GameRoom {
     const playerId = this.connections.get(socket);
     this.connections.delete(socket);
 
-    if (playerId) {
-      this.store.markPlayerDisconnected(playerId);
+    if (playerId && this.runtime) {
+      this.runtime.store.markPlayerDisconnected(playerId);
       this.broadcastSnapshots();
     }
   }
@@ -155,8 +233,12 @@ export class GameRoom {
   }
 
   private broadcastSnapshots(): void {
+    if (!this.runtime) {
+      return;
+    }
+
     for (const [socket, playerId] of this.connections.entries()) {
-      this.send(socket, this.store.createSnapshotEvent(playerId));
+      this.send(socket, this.runtime.store.createSnapshotEvent(playerId));
     }
   }
 
@@ -165,8 +247,31 @@ export class GameRoom {
       error instanceof CommandError
         ? error
         : new CommandError("INTERNAL_ERROR", error instanceof Error ? error.message : "Unknown error.");
-    this.send(socket, this.store.createCommandRejectedEvent(commandError, requestId));
+    const store = this.runtime?.store ?? new GameStateStore("cloudflare_room");
+    this.send(socket, store.createCommandRejectedEvent(commandError, requestId));
   }
+}
+
+function cardCatalogResponse(result: WorkerCardCatalogResult): Record<string, unknown> {
+  return {
+    source: result.source,
+    version: result.catalog.version,
+    cardCount: Object.keys(result.catalog.cardDefinitions).length,
+    starterDeckSize: result.catalog.starterDeckCardIds.length,
+    cardDefinitions: result.catalog.cardDefinitions
+  };
+}
+
+function authorizeAdmin(request: Request, env: Env): Response | null {
+  if (!env.CARD_CATALOG_ADMIN_TOKEN) {
+    return json({ error: "CARD_CATALOG_ADMIN_TOKEN is not configured." }, 503);
+  }
+
+  if (request.headers.get("Authorization") !== `Bearer ${env.CARD_CATALOG_ADMIN_TOKEN}`) {
+    return json({ error: "Unauthorized." }, 401);
+  }
+
+  return null;
 }
 
 function redactPrivateEvent(event: GameEvent, recipientPlayerId: string): GameEvent {
@@ -196,7 +301,7 @@ function json(body: unknown, status = 200): Response {
 function corsHeaders(): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type"
   };
 }

@@ -1,6 +1,7 @@
-import { CARD_DEFINITIONS } from "../shared/rules/cardDefinitions.js";
+import { DEFAULT_CARD_CATALOG } from "../shared/rules/cardDefinitions.js";
 import { resolveCardEffect } from "../shared/rules/cardEffects.js";
 import type { CardDefinition, CardInstance } from "../shared/types/card.js";
+import type { CardCatalog } from "../shared/types/cardCatalog.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
@@ -18,14 +19,20 @@ const MAX_ENERGY_CAP = 10;
 
 export class GameStateStore {
   readonly cardDefinitions: Record<string, CardDefinition>;
+  readonly cardCatalogVersion: string;
 
-  private readonly deckManager = new DeckManager();
+  private readonly deckManager: DeckManager;
   private readonly snapshotService: SnapshotService;
   private readonly state: GameState;
   private nextPlayerNumber = 1;
 
-  constructor(roomId = `room_${Math.random().toString(36).slice(2, 8)}`) {
-    this.cardDefinitions = CARD_DEFINITIONS;
+  constructor(
+    roomId = `room_${Math.random().toString(36).slice(2, 8)}`,
+    cardCatalog: CardCatalog = DEFAULT_CARD_CATALOG
+  ) {
+    this.cardDefinitions = cardCatalog.cardDefinitions;
+    this.cardCatalogVersion = cardCatalog.version;
+    this.deckManager = new DeckManager(cardCatalog.starterDeckCardIds);
     this.snapshotService = new SnapshotService(this.cardDefinitions);
     this.state = {
       roomId,
@@ -239,7 +246,8 @@ export class GameStateStore {
       seq: this.state.eventSeq,
       payload: {
         state: this.snapshotService.createVisibleState(this.state, playerId),
-        cardDefinitions: this.cardDefinitions
+        cardDefinitions: this.cardDefinitions,
+        cardCatalogVersion: this.cardCatalogVersion
       }
     };
   }
