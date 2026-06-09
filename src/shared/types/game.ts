@@ -5,7 +5,7 @@ export type GameStatus = "WAITING" | "PLAYING" | "ENDED";
 export type PlayerState = {
   playerId: string;
   name: string;
-  teamId?: string;
+  teamId: string;
   hp: number;
   energy: number;
   maxEnergy: number;

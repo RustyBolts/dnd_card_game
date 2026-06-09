@@ -116,6 +116,7 @@ export type CardPlayedEvent = {
     cardInstanceId: string;
     cardId: string;
     targetId?: string;
+    targetIds?: string[];
   };
 };
 

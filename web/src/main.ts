@@ -1,8 +1,9 @@
 import {
+  getAutomaticTargetIds,
   getCardTargeting,
   getSelectableTargetIds
 } from "../../src/shared/rules/cardTargets";
-import type { CardTargeting, VisibleCardInstance } from "../../src/shared/types/card";
+import type { CardDefinition, CardTargeting, VisibleCardInstance } from "../../src/shared/types/card";
 import type { VisibleGameState } from "../../src/shared/types/game";
 import type { GameEvent, GameStateSyncEvent, JoinAcceptedEvent, NetworkMessage } from "../../src/shared/types/network";
 import "./styles.css";
@@ -25,6 +26,7 @@ const eventLog = byId<HTMLOListElement>("event-log");
 let socket: WebSocket | null = null;
 let playerId: string | null = null;
 let localState: VisibleGameState | null = null;
+let cardDefinitions: Record<string, CardDefinition> = {};
 
 workerUrlInput.value = import.meta.env.VITE_WORKER_WS_URL || defaultWorkerUrl();
 
@@ -79,6 +81,7 @@ function handleMessage(rawMessage: string): void {
 
   if (isGameStateSync(message)) {
     localState = message.payload.state;
+    cardDefinitions = message.payload.cardDefinitions;
   }
 
   addLog(message);
@@ -117,6 +120,7 @@ function render(): void {
             <strong>${escapeHtml(player.name)}</strong>
             <span>${id}</span>
           </div>
+          <div>Team ${escapeHtml(player.teamId)}</div>
           <div>HP ${player.hp}</div>
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
@@ -133,33 +137,61 @@ function render(): void {
 }
 
 function renderCard(card: VisibleCardInstance): string {
-  const targeting = getCardTargeting(card);
-  const targetControl = renderTargetControl(card, targeting);
-  const isPlayDisabled = targeting.requiresTarget && getTargetOptions(targeting).length === 0;
+  const visibleCard = hydrateVisibleCard(card);
+  const targeting = getCardTargeting(visibleCard);
+  const targetControl = renderTargetControl(visibleCard, targeting);
+  const isPlayDisabled = requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0;
 
   return `
     <article class="card">
-      <div class="card-cost">${card.cost ?? 0}</div>
-      <h3>${escapeHtml(card.name ?? card.cardId)}</h3>
-      <p>${escapeHtml(card.description ?? "")}</p>
+      <div class="card-cost">${visibleCard.cost ?? 0}</div>
+      <h3>${escapeHtml(visibleCard.name ?? visibleCard.cardId)}</h3>
+      <p>${escapeHtml(visibleCard.description ?? "")}</p>
       <div class="card-meta">
         <span>${targetingLabel(targeting)}</span>
       </div>
       ${targetControl}
       <div class="card-actions">
-        <button type="button" data-play="${card.instanceId}" ${isPlayDisabled ? "disabled" : ""}>Play</button>
-        <button type="button" data-discard="${card.instanceId}">Discard</button>
+        <button type="button" data-play="${visibleCard.instanceId}" ${isPlayDisabled ? "disabled" : ""}>Play</button>
+        <button type="button" data-discard="${visibleCard.instanceId}">Discard</button>
       </div>
     </article>
   `;
 }
 
+function hydrateVisibleCard(card: VisibleCardInstance): VisibleCardInstance {
+  const definition = cardDefinitions[card.cardId];
+
+  if (!definition) {
+    return card;
+  }
+
+  return {
+    ...card,
+    name: card.name ?? definition.name,
+    cost: card.cost ?? definition.cost,
+    type: card.type ?? definition.type,
+    description: card.description ?? definition.description,
+    effect: card.effect ?? definition.effect,
+    targeting: card.targeting ?? definition.targeting
+  };
+}
+
 function renderTargetControl(card: VisibleCardInstance, targeting: CardTargeting): string {
+  if (targeting.selection === "GROUP") {
+    const targetIds = getPotentialTargetIds(targeting);
+    if (targetIds.length === 0) {
+      return `<p class="muted card-target-empty">No valid target</p>`;
+    }
+
+    return `<p class="card-target-summary">Targets: ${targetIds.map((id) => escapeHtml(playerLabel(id))).join(", ")}</p>`;
+  }
+
   if (!targeting.requiresTarget) {
     return "";
   }
 
-  const options = getTargetOptions(targeting);
+  const options = getPotentialTargetIds(targeting);
   if (options.length === 0) {
     return `<p class="muted card-target-empty">No valid target</p>`;
   }
@@ -176,9 +208,13 @@ function renderTargetControl(card: VisibleCardInstance, targeting: CardTargeting
   `;
 }
 
-function getTargetOptions(targeting: CardTargeting): string[] {
+function getPotentialTargetIds(targeting: CardTargeting): string[] {
   if (!localState || !playerId) {
     return [];
+  }
+
+  if (targeting.selection === "GROUP" || !targeting.requiresTarget) {
+    return getAutomaticTargetIds(localState, playerId, targeting);
   }
 
   return getSelectableTargetIds(localState, playerId, targeting);
@@ -238,13 +274,23 @@ function findVisibleHandCard(cardInstanceId: string): VisibleCardInstance | unde
     return undefined;
   }
 
-  return (localState.zones.hand[playerId] ?? []).find((card) => card.instanceId === cardInstanceId);
+  const card = (localState.zones.hand[playerId] ?? []).find((candidate) => candidate.instanceId === cardInstanceId);
+  return card ? hydrateVisibleCard(card) : undefined;
 }
 
 function selectedTargetForCard(cardInstanceId: string): string | undefined {
   const select = Array.from(handEl.querySelectorAll<HTMLSelectElement>("select[data-target-for]"))
     .find((candidate) => candidate.dataset.targetFor === cardInstanceId);
   return select?.value || undefined;
+}
+
+function requiresEffectTarget(card: VisibleCardInstance): boolean {
+  return card.effect?.type === "DAMAGE" || card.effect?.type === "HEAL";
+}
+
+function playerLabel(id: string): string {
+  const player = localState?.players[id];
+  return player ? `${player.name} (${id})` : id;
 }
 
 function addLog(message: NetworkMessage | GameEvent): void {

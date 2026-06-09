@@ -2,12 +2,19 @@ import { GameStateStore } from "../src/host/GameStateStore.js";
 import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
 
 export function createStartedGame(cardCatalog?: CardCatalog): GameStateStore {
-  const store = new GameStateStore("test_room", cardCatalog);
-  const playerOne = store.addPlayer("Alice").player;
-  const playerTwo = store.addPlayer("Bob").player;
+  return createStartedGameWithPlayers(["Alice", "Bob"], cardCatalog);
+}
 
-  store.markPlayerReady(playerOne.playerId);
-  store.markPlayerReady(playerTwo.playerId);
+export function createStartedGameWithPlayers(
+  playerNames: string[],
+  cardCatalog?: CardCatalog
+): GameStateStore {
+  const store = new GameStateStore("test_room", cardCatalog);
+  const players = playerNames.map((name) => store.addPlayer(name).player);
+
+  for (const player of players) {
+    store.markPlayerReady(player.playerId);
+  }
 
   return store;
 }

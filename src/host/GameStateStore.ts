@@ -1,8 +1,8 @@
 import { DEFAULT_CARD_CATALOG } from "../shared/rules/cardDefinitions.js";
 import { resolveCardEffect } from "../shared/rules/cardEffects.js";
 import {
+  getAutomaticTargetIds,
   getCardTargeting,
-  getImplicitTargetId,
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
 import type { CardDefinition, CardInstance } from "../shared/types/card.js";
@@ -75,6 +75,7 @@ export class GameStateStore {
     const player: PlayerState = {
       playerId,
       name: playerName.trim() || playerId,
+      teamId: getDefaultTeamId(this.state.playerOrder.length),
       hp: INITIAL_HP,
       energy: 0,
       maxEnergy: 0,
@@ -163,8 +164,8 @@ export class GameStateStore {
       throw new CommandError("NOT_ENOUGH_ENERGY", `${definition.name} costs ${definition.cost} energy.`);
     }
 
-    const resolvedTargetId = this.resolveTargetId(definition, playerId, targetId);
-    this.assertEffectTargetResolved(definition, resolvedTargetId);
+    const resolvedTargetIds = this.resolveTargetIds(definition, playerId, targetId);
+    this.assertEffectTargetsResolved(definition, resolvedTargetIds);
     player.energy -= definition.cost;
 
     this.state.zones.hand[playerId].splice(index, 1);
@@ -179,7 +180,8 @@ export class GameStateStore {
           playerId,
           cardInstanceId,
           cardId: card.cardId,
-          targetId: resolvedTargetId
+          targetId: resolvedTargetIds[0],
+          targetIds: resolvedTargetIds
         }
       }
     ];
@@ -190,7 +192,7 @@ export class GameStateStore {
         sourceCard: card,
         sourceDefinition: definition,
         playerId,
-        targetId: resolvedTargetId,
+        targetIds: resolvedTargetIds,
         nextSeq: () => this.nextSeq(),
         drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
       })
@@ -383,48 +385,43 @@ export class GameStateStore {
     return definition;
   }
 
-  private resolveTargetId(
+  private resolveTargetIds(
     definition: CardDefinition,
     playerId: string,
     targetId?: string
-  ): string | undefined {
+  ): string[] {
     const targeting = getCardTargeting(definition);
-
-    if (targeting.selection === "GROUP") {
-      throw new CommandError(
-        "UNSUPPORTED_TARGETING",
-        `${definition.name} uses group targeting, which is not supported by the current command protocol.`
-      );
-    }
 
     if (targeting.requiresTarget && !targetId) {
       throw new CommandError("INVALID_TARGET", `${definition.name} requires a target.`);
     }
 
-    if (!targeting.requiresTarget && targetId) {
-      throw new CommandError("INVALID_TARGET", `${definition.name} does not accept an explicit target.`);
+    if (!targeting.requiresTarget) {
+      return getAutomaticTargetIds(this.state, playerId, targeting);
     }
 
     if (!targetId) {
-      return getImplicitTargetId(targeting, playerId);
+      throw new CommandError("INVALID_TARGET", `${definition.name} requires a target.`);
     }
 
-    if (!this.state.players[targetId]) {
-      throw new CommandError("INVALID_TARGET", `Target ${targetId} does not exist.`);
+    const requiredTargetId = targetId;
+
+    if (!this.state.players[requiredTargetId]) {
+      throw new CommandError("INVALID_TARGET", `Target ${requiredTargetId} does not exist.`);
     }
 
-    if (!isPlayerTargetAllowed(this.state, playerId, targetId, targeting)) {
+    if (!isPlayerTargetAllowed(this.state, playerId, requiredTargetId, targeting)) {
       throw new CommandError(
         "INVALID_TARGET",
-        `${definition.name} cannot target ${targetId} with ${targeting.scope.toLowerCase()} targeting.`
+        `${definition.name} cannot target ${requiredTargetId} with ${targeting.scope.toLowerCase()} targeting.`
       );
     }
 
-    return targetId;
+    return [requiredTargetId];
   }
 
-  private assertEffectTargetResolved(definition: CardDefinition, targetId?: string): void {
-    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && !targetId) {
+  private assertEffectTargetsResolved(definition: CardDefinition, targetIds: string[]): void {
+    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
       throw new CommandError("INVALID_TARGET", `${definition.name} cannot resolve an effect target.`);
     }
   }
@@ -451,4 +448,8 @@ export class GameStateStore {
     this.state.eventSeq += 1;
     return this.state.eventSeq;
   }
+}
+
+function getDefaultTeamId(playerIndex: number): string {
+  return playerIndex % 2 === 0 ? "team_1" : "team_2";
 }

@@ -22,6 +22,7 @@ export type EffectContext = {
   sourceDefinition: CardDefinition;
   playerId: string;
   targetId?: string;
+  targetIds?: string[];
   nextSeq: () => number;
   drawCards: DrawCardsFn;
 };
@@ -50,20 +51,22 @@ function resolveDamage(
   effect: Extract<CardEffectDefinition, { type: "DAMAGE" }>,
   context: EffectContext
 ): EffectEvent[] {
-  const targetId = context.targetId;
-  if (!targetId) {
+  const targetIds = getTargetIds(context);
+  if (targetIds.length === 0) {
     throw new Error("No valid target for damage effect.");
   }
 
-  const target = context.state.players[targetId];
-  if (!target) {
-    throw new Error(`Target player ${targetId} does not exist.`);
-  }
+  const events: EffectEvent[] = [];
+  let defeatedTargetId: string | null = null;
 
-  target.hp = Math.max(0, target.hp - effect.value);
+  for (const targetId of targetIds) {
+    const target = context.state.players[targetId];
+    if (!target) {
+      throw new Error(`Target player ${targetId} does not exist.`);
+    }
 
-  const events: EffectEvent[] = [
-    {
+    target.hp = Math.max(0, target.hp - effect.value);
+    events.push({
       type: "DAMAGE_APPLIED",
       seq: context.nextSeq(),
       payload: {
@@ -72,10 +75,14 @@ function resolveDamage(
         amount: effect.value,
         hpAfter: target.hp
       }
-    }
-  ];
+    });
 
-  if (target.hp <= 0) {
+    if (target.hp <= 0) {
+      defeatedTargetId ??= targetId;
+    }
+  }
+
+  if (defeatedTargetId) {
     context.state.status = "ENDED";
     context.state.winnerId = context.playerId;
     events.push({
@@ -94,16 +101,19 @@ function resolveHeal(
   effect: Extract<CardEffectDefinition, { type: "HEAL" }>,
   context: EffectContext
 ): HealAppliedEvent[] {
-  const targetId = context.targetId ?? context.playerId;
-  const target = context.state.players[targetId];
-  if (!target) {
-    throw new Error(`Target player ${targetId} does not exist.`);
+  const targetIds = getTargetIds(context);
+  if (targetIds.length === 0) {
+    throw new Error("No valid target for heal effect.");
   }
 
-  target.hp = Math.min(20, target.hp + effect.value);
+  return targetIds.map((targetId) => {
+    const target = context.state.players[targetId];
+    if (!target) {
+      throw new Error(`Target player ${targetId} does not exist.`);
+    }
 
-  return [
-    {
+    target.hp = Math.min(20, target.hp + effect.value);
+    return {
       type: "HEAL_APPLIED",
       seq: context.nextSeq(),
       payload: {
@@ -112,6 +122,18 @@ function resolveHeal(
         amount: effect.value,
         hpAfter: target.hp
       }
-    }
-  ];
+    };
+  });
+}
+
+function getTargetIds(context: EffectContext): string[] {
+  if (context.targetIds && context.targetIds.length > 0) {
+    return context.targetIds;
+  }
+
+  if (context.targetId) {
+    return [context.targetId];
+  }
+
+  return [context.playerId];
 }

@@ -363,12 +363,19 @@ function defaultRequiresTarget(
   selection: CardTargetSelection | string,
   scope: CardTargetScope | string
 ): boolean {
-  return selection === "SINGLE" || (selection === "GROUP" && scope === "ENEMY");
+  return selection === "SINGLE";
 }
 
 function validateTargeting(targeting: CardTargeting, source: string): CardTargeting {
   if (targeting.selection === "NONE" && targeting.requiresTarget) {
     throw new Error(`${source} targetRequired cannot be true when targetSelection is NONE.`);
+  }
+
+  if (targeting.selection === "GROUP") {
+    return {
+      ...targeting,
+      requiresTarget: false
+    };
   }
 
   return targeting;

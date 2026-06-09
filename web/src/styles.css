@@ -243,6 +243,13 @@ h2 {
   font-size: 13px;
 }
 
+.card-target-summary {
+  position: relative;
+  z-index: 1;
+  color: #d7d8ca;
+  font-size: 13px;
+}
+
 .card-actions {
   display: flex;
   gap: 8px;

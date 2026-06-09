@@ -28,7 +28,7 @@ export function defaultTargetingForEffect(effect: CardEffectDefinition): CardTar
 
 export function getCardTargeting(definition: TargetableCardDefinition): CardTargeting {
   if (definition.targeting) {
-    return definition.targeting;
+    return normalizeTargeting(definition.targeting);
   }
 
   if (definition.effect) {
@@ -48,6 +48,21 @@ export function getImplicitTargetId(targeting: CardTargeting, playerId: string):
   }
 
   return undefined;
+}
+
+export function getAutomaticTargetIds(
+  state: TargetState,
+  playerId: string,
+  targeting: CardTargeting
+): string[] {
+  if (targeting.selection === "GROUP") {
+    return state.playerOrder.filter((targetId) =>
+      isPlayerTargetAllowed(state, playerId, targetId, targeting)
+    );
+  }
+
+  const implicitTargetId = getImplicitTargetId(targeting, playerId);
+  return implicitTargetId ? [implicitTargetId] : [];
 }
 
 export function getSelectableTargetIds(
@@ -114,4 +129,15 @@ function isEnemy(
   }
 
   return true;
+}
+
+function normalizeTargeting(targeting: CardTargeting): CardTargeting {
+  if (targeting.selection === "GROUP") {
+    return {
+      ...targeting,
+      requiresTarget: false
+    };
+  }
+
+  return targeting;
 }
