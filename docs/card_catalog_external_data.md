@@ -33,7 +33,7 @@ Google Spreadsheet 建議建立兩個工作表：
 ### `cards` 欄位
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,enabled
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled
 ```
 
 - `cardId`：穩定唯一 ID，牌組和遊戲狀態都用這個 ID。
@@ -44,7 +44,21 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,enabled
 - `effectType`：`DAMAGE`、`HEAL` 或 `DRAW`。
 - `effectValue`：`DAMAGE`、`HEAL` 使用的數值。
 - `effectCount`：`DRAW` 使用的抽牌張數。
+- `targetSelection`：`NONE`、`SINGLE` 或 `GROUP`。
+- `targetScope`：`SELF`、`ALLY`、`ENEMY` 或 `ANY`。
+- `targetRequired`：`true` 表示 command 必須帶目標；`false` 表示玩家不需要也不能手動指定目標。
 - `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+目標欄位的建議用法：
+
+- 自己：`targetSelection=NONE`、`targetScope=SELF`、`targetRequired=false`。
+- 敵人單體：`targetSelection=SINGLE`、`targetScope=ENEMY`、`targetRequired=true`。
+- 可指定任意單體，包含自己：`targetSelection=SINGLE`、`targetScope=ANY`、`targetRequired=true`。
+- 隊友單體：`targetSelection=SINGLE`、`targetScope=ALLY`、`targetRequired=true`。目前對戰狀態尚未提供隊伍設定，之後加入 `teamId` 後才會有可選隊友。
+- 隊友群體：`targetSelection=GROUP`、`targetScope=ALLY`、`targetRequired=false`。
+- 敵人群體：`targetSelection=GROUP`、`targetScope=ENEMY`、`targetRequired=true`。目前 command protocol 尚未提供群體目標 ID，因此這類牌可以先建資料，但不能實際施放。
+
+為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有目標欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL` 與 `DRAW` 會推導成作用於自己且不需指定目標。
 
 ### `starter_deck` 欄位
 

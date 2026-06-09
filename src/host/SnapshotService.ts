@@ -40,7 +40,8 @@ export class SnapshotService {
       cost: definition?.cost,
       type: definition?.type,
       description: definition?.description,
-      effect: definition?.effect
+      effect: definition?.effect,
+      targeting: definition?.targeting
     };
   }
 

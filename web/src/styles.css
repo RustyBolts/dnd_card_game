@@ -137,16 +137,11 @@ h2 {
   color: #acd27e;
 }
 
-.actions,
-.target-row {
+.actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 18px;
-}
-
-.target-row label {
-  min-width: 220px;
 }
 
 .player {
@@ -222,6 +217,30 @@ h2 {
 .card p {
   color: #d7d8ca;
   line-height: 1.45;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #acd27e;
+  font-size: 12px;
+}
+
+.card-meta span {
+  padding: 4px 8px;
+  border: 1px solid rgba(172, 210, 126, 0.22);
+  border-radius: 999px;
+  background: rgba(172, 210, 126, 0.08);
+}
+
+.card-target {
+  position: relative;
+  z-index: 1;
+}
+
+.card-target-empty {
+  font-size: 13px;
 }
 
 .card-actions {

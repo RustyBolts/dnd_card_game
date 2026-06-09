@@ -7,6 +7,16 @@ export type CardEffectDefinition =
   | { type: "HEAL"; value: number }
   | { type: "DRAW"; count: number };
 
+export type CardTargetSelection = "NONE" | "SINGLE" | "GROUP";
+
+export type CardTargetScope = "SELF" | "ALLY" | "ENEMY" | "ANY";
+
+export type CardTargeting = {
+  selection: CardTargetSelection;
+  scope: CardTargetScope;
+  requiresTarget: boolean;
+};
+
 export type CardDefinition = {
   cardId: string;
   name: string;
@@ -14,6 +24,7 @@ export type CardDefinition = {
   type: CardType;
   description: string;
   effect: CardEffectDefinition;
+  targeting: CardTargeting;
 };
 
 export type CardInstance = {
@@ -29,5 +40,6 @@ export type VisibleCardInstance = CardInstance & {
   type?: CardType;
   description?: string;
   effect?: CardEffectDefinition;
+  targeting?: CardTargeting;
   hidden?: boolean;
 };

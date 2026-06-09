@@ -1,9 +1,13 @@
 import type {
   CardDefinition,
   CardEffectDefinition,
+  CardTargeting,
+  CardTargetScope,
+  CardTargetSelection,
   CardType
 } from "../types/card.js";
 import type { CardCatalog } from "../types/cardCatalog.js";
+import { defaultTargetingForEffect } from "../rules/cardTargets.js";
 
 export type CardCatalogCsvInput = {
   cardsCsv: string;
@@ -18,6 +22,8 @@ type CsvRecord = {
 
 const CARD_TYPES = new Set(["ATTACK", "SKILL", "ITEM", "STATUS"]);
 const EFFECT_TYPES = new Set(["DAMAGE", "HEAL", "DRAW"]);
+const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
+const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
 
 export function normalizePublishedCsvUrl(url: string): string {
   const parsedUrl = new URL(url);
@@ -166,13 +172,16 @@ function parseCardDefinitionRecord(
   record: Record<string, unknown>,
   source: string
 ): CardDefinition {
+  const effect = parseEffect(record, source);
+
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
     name: readRequiredString(record.name, "name", source),
     cost: parseInteger(record.cost, "cost", source, 0),
     type: parseCardType(record.type, source),
     description: readRequiredString(record.description, "description", source),
-    effect: parseEffect(record, source)
+    effect,
+    targeting: parseTargetingRecord(record, effect, source)
   };
 }
 
@@ -180,13 +189,16 @@ function parseCardDefinitionJsonRecord(
   record: Record<string, unknown>,
   source: string
 ): CardDefinition {
+  const effect = parseEffectJson(record.effect, `${source}.effect`);
+
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
     name: readRequiredString(record.name, "name", source),
     cost: parseInteger(record.cost, "cost", source, 0),
     type: parseCardType(record.type, source),
     description: readRequiredString(record.description, "description", source),
-    effect: parseEffectJson(record.effect, `${source}.effect`)
+    effect,
+    targeting: parseTargetingJson(record.targeting, effect, `${source}.targeting`)
   };
 }
 
@@ -224,6 +236,63 @@ function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
   };
 }
 
+function parseTargetingRecord(
+  record: Record<string, unknown>,
+  effect: CardEffectDefinition,
+  source: string
+): CardTargeting {
+  const rawSelection = readOptionalString(record.targetSelection);
+  const rawScope = readOptionalString(record.targetScope);
+  const rawRequired = readOptionalString(record.targetRequired);
+
+  if (!rawSelection && !rawScope && !rawRequired) {
+    return defaultTargetingForEffect(effect);
+  }
+
+  if (!rawSelection || !rawScope) {
+    throw new Error(`${source} targetSelection and targetScope must be provided together.`);
+  }
+
+  const selection = parseTargetSelection(rawSelection, "targetSelection", source);
+  const scope = parseTargetScope(rawScope, "targetScope", source);
+
+  return validateTargeting(
+    {
+      selection,
+      scope,
+      requiresTarget: rawRequired
+        ? parseBoolean(rawRequired, "targetRequired", source)
+        : defaultRequiresTarget(selection, scope)
+    },
+    source
+  );
+}
+
+function parseTargetingJson(
+  value: unknown,
+  effect: CardEffectDefinition,
+  source: string
+): CardTargeting {
+  if (value === undefined || value === null) {
+    return defaultTargetingForEffect(effect);
+  }
+
+  const record = readRecord(value, source);
+  const selection = parseTargetSelection(record.selection, "selection", source);
+  const scope = parseTargetScope(record.scope, "scope", source);
+
+  return validateTargeting(
+    {
+      selection,
+      scope,
+      requiresTarget: record.requiresTarget !== undefined
+        ? parseBoolean(record.requiresTarget, "requiresTarget", source)
+        : defaultRequiresTarget(selection, scope)
+    },
+    source
+  );
+}
+
 function parseCardType(value: unknown, source: string): CardType {
   const cardType = readRequiredString(value, "type", source).toUpperCase();
 
@@ -246,6 +315,63 @@ function parseEffectType(
   }
 
   return effectType as CardEffectDefinition["type"];
+}
+
+function parseTargetSelection(
+  value: unknown,
+  field: string,
+  source: string
+): CardTargetSelection {
+  const selection = readRequiredString(value, field, source).toUpperCase();
+
+  if (!TARGET_SELECTIONS.has(selection)) {
+    throw new Error(`${source} ${field} must be NONE, SINGLE, or GROUP.`);
+  }
+
+  return selection as CardTargetSelection;
+}
+
+function parseTargetScope(value: unknown, field: string, source: string): CardTargetScope {
+  const scope = readRequiredString(value, field, source).toUpperCase();
+
+  if (!TARGET_SCOPES.has(scope)) {
+    throw new Error(`${source} ${field} must be SELF, ALLY, ENEMY, or ANY.`);
+  }
+
+  return scope as CardTargetScope;
+}
+
+function parseBoolean(value: unknown, field: string, source: string): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = readRequiredString(value, field, source).toLowerCase();
+
+  if (["true", "1", "yes", "y"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "n"].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(`${source} ${field} must be true or false.`);
+}
+
+function defaultRequiresTarget(
+  selection: CardTargetSelection | string,
+  scope: CardTargetScope | string
+): boolean {
+  return selection === "SINGLE" || (selection === "GROUP" && scope === "ENEMY");
+}
+
+function validateTargeting(targeting: CardTargeting, source: string): CardTargeting {
+  if (targeting.selection === "NONE" && targeting.requiresTarget) {
+    throw new Error(`${source} targetRequired cannot be true when targetSelection is NONE.`);
+  }
+
+  return targeting;
 }
 
 function parseInteger(value: unknown, field: string, source: string, min: number): number {

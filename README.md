@@ -9,6 +9,7 @@ Wi-Fi LAN 回合制卡牌桌遊原型。專案依照附件規格建立，採用 
 - 支援 `JOIN_ROOM`、`PLAYER_READY`、`DRAW_CARD`、`PLAY_CARD`、`DISCARD_CARD`、`END_TURN`。
 - Host 驗證目前回合、手牌歸屬、卡牌 zone 與能量費用。
 - 支援傷害、治療、抽牌三種卡牌效果。
+- 卡片定義包含施放目標規則，可區分自己、敵人單體、任意單體、隊友單體與未來群體目標。
 - Host 針對每個玩家送出可見 snapshot，避免洩漏對手手牌內容。
 - Console client 可在同 Wi-Fi 的不同裝置上連線測試。
 
@@ -180,7 +181,7 @@ docs/
 
 ## 設計重點
 
-- `CardDefinition` 是卡牌模板。
+- `CardDefinition` 是卡牌模板，包含 `effect` 與 `targeting`。目前 `targeting` 由 Host/Worker 驗證，前端只用它顯示可選目標。
 - `CardInstance` 是對戰中實際存在的一張卡，所有操作都使用 `instanceId`。
 - 隨機結果由 Host 產生，例如洗牌與抽牌。
 - Client 不直接推測結果，只接受 Host event / snapshot。

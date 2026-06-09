@@ -8,7 +8,8 @@ export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
     cost: 2,
     type: "ATTACK",
     description: "對一名目標造成 3 點傷害。",
-    effect: { type: "DAMAGE", value: 3 }
+    effect: { type: "DAMAGE", value: 3 },
+    targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
   },
   dagger_strike: {
     cardId: "dagger_strike",
@@ -16,7 +17,8 @@ export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
     cost: 1,
     type: "ATTACK",
     description: "對一名目標造成 1 點傷害。",
-    effect: { type: "DAMAGE", value: 1 }
+    effect: { type: "DAMAGE", value: 1 },
+    targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
   },
   healing_potion: {
     cardId: "healing_potion",
@@ -24,7 +26,8 @@ export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
     cost: 1,
     type: "ITEM",
     description: "恢復自己 3 點 HP。",
-    effect: { type: "HEAL", value: 3 }
+    effect: { type: "HEAL", value: 3 },
+    targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
   },
   tactical_insight: {
     cardId: "tactical_insight",
@@ -32,7 +35,8 @@ export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
     cost: 1,
     type: "SKILL",
     description: "抽 2 張牌。",
-    effect: { type: "DRAW", count: 2 }
+    effect: { type: "DRAW", count: 2 },
+    targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
   },
   mana_spark: {
     cardId: "mana_spark",
@@ -40,7 +44,8 @@ export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
     cost: 0,
     type: "SKILL",
     description: "對一名目標造成 1 點傷害。",
-    effect: { type: "DAMAGE", value: 1 }
+    effect: { type: "DAMAGE", value: 1 },
+    targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
   }
 };
 

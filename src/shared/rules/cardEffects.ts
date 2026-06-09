@@ -50,7 +50,7 @@ function resolveDamage(
   effect: Extract<CardEffectDefinition, { type: "DAMAGE" }>,
   context: EffectContext
 ): EffectEvent[] {
-  const targetId = context.targetId ?? findFirstOpponent(context.state, context.playerId);
+  const targetId = context.targetId;
   if (!targetId) {
     throw new Error("No valid target for damage effect.");
   }
@@ -114,8 +114,4 @@ function resolveHeal(
       }
     }
   ];
-}
-
-function findFirstOpponent(state: GameState, playerId: string): string | undefined {
-  return state.playerOrder.find((candidateId) => candidateId !== playerId);
 }

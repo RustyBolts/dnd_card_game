@@ -1,5 +1,10 @@
 import { DEFAULT_CARD_CATALOG } from "../shared/rules/cardDefinitions.js";
 import { resolveCardEffect } from "../shared/rules/cardEffects.js";
+import {
+  getCardTargeting,
+  getImplicitTargetId,
+  isPlayerTargetAllowed
+} from "../shared/rules/cardTargets.js";
 import type { CardDefinition, CardInstance } from "../shared/types/card.js";
 import type { CardCatalog } from "../shared/types/cardCatalog.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
@@ -158,7 +163,8 @@ export class GameStateStore {
       throw new CommandError("NOT_ENOUGH_ENERGY", `${definition.name} costs ${definition.cost} energy.`);
     }
 
-    this.validateTarget(definition, playerId, targetId);
+    const resolvedTargetId = this.resolveTargetId(definition, playerId, targetId);
+    this.assertEffectTargetResolved(definition, resolvedTargetId);
     player.energy -= definition.cost;
 
     this.state.zones.hand[playerId].splice(index, 1);
@@ -173,7 +179,7 @@ export class GameStateStore {
           playerId,
           cardInstanceId,
           cardId: card.cardId,
-          targetId
+          targetId: resolvedTargetId
         }
       }
     ];
@@ -184,7 +190,7 @@ export class GameStateStore {
         sourceCard: card,
         sourceDefinition: definition,
         playerId,
-        targetId,
+        targetId: resolvedTargetId,
         nextSeq: () => this.nextSeq(),
         drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
       })
@@ -377,17 +383,49 @@ export class GameStateStore {
     return definition;
   }
 
-  private validateTarget(definition: CardDefinition, playerId: string, targetId?: string): void {
+  private resolveTargetId(
+    definition: CardDefinition,
+    playerId: string,
+    targetId?: string
+  ): string | undefined {
+    const targeting = getCardTargeting(definition);
+
+    if (targeting.selection === "GROUP") {
+      throw new CommandError(
+        "UNSUPPORTED_TARGETING",
+        `${definition.name} uses group targeting, which is not supported by the current command protocol.`
+      );
+    }
+
+    if (targeting.requiresTarget && !targetId) {
+      throw new CommandError("INVALID_TARGET", `${definition.name} requires a target.`);
+    }
+
+    if (!targeting.requiresTarget && targetId) {
+      throw new CommandError("INVALID_TARGET", `${definition.name} does not accept an explicit target.`);
+    }
+
     if (!targetId) {
-      return;
+      return getImplicitTargetId(targeting, playerId);
     }
 
     if (!this.state.players[targetId]) {
       throw new CommandError("INVALID_TARGET", `Target ${targetId} does not exist.`);
     }
 
-    if (definition.effect.type === "DAMAGE" && targetId === playerId) {
-      throw new CommandError("INVALID_TARGET", "Damage cards must target an opponent.");
+    if (!isPlayerTargetAllowed(this.state, playerId, targetId, targeting)) {
+      throw new CommandError(
+        "INVALID_TARGET",
+        `${definition.name} cannot target ${targetId} with ${targeting.scope.toLowerCase()} targeting.`
+      );
+    }
+
+    return targetId;
+  }
+
+  private assertEffectTargetResolved(definition: CardDefinition, targetId?: string): void {
+    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && !targetId) {
+      throw new CommandError("INVALID_TARGET", `${definition.name} cannot resolve an effect target.`);
     }
   }
 

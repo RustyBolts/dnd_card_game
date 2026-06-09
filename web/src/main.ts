@@ -1,4 +1,8 @@
-import type { VisibleCardInstance } from "../../src/shared/types/card";
+import {
+  getCardTargeting,
+  getSelectableTargetIds
+} from "../../src/shared/rules/cardTargets";
+import type { CardTargeting, VisibleCardInstance } from "../../src/shared/types/card";
 import type { VisibleGameState } from "../../src/shared/types/game";
 import type { GameEvent, GameStateSyncEvent, JoinAcceptedEvent, NetworkMessage } from "../../src/shared/types/network";
 import "./styles.css";
@@ -15,7 +19,6 @@ const currentPlayerEl = byId<HTMLElement>("current-player");
 const readyButton = byId<HTMLButtonElement>("ready-button");
 const drawButton = byId<HTMLButtonElement>("draw-button");
 const endButton = byId<HTMLButtonElement>("end-button");
-const targetSelect = byId<HTMLSelectElement>("target-select");
 const handEl = byId<HTMLElement>("hand");
 const eventLog = byId<HTMLOListElement>("event-log");
 
@@ -94,7 +97,6 @@ function render(): void {
     turnLabel.textContent = "Turn 0";
     currentPlayerEl.textContent = "Current: none";
     handEl.innerHTML = `<div class="empty-card">Connect to a room</div>`;
-    targetSelect.innerHTML = "";
     return;
   }
 
@@ -123,11 +125,6 @@ function render(): void {
     })
     .join("");
 
-  targetSelect.innerHTML = localState.playerOrder
-    .filter((id) => id !== playerId)
-    .map((id) => `<option value="${id}">${escapeHtml(localState!.players[id].name)} (${id})</option>`)
-    .join("");
-
   const hand = playerId ? localState.zones.hand[playerId] ?? [] : [];
   handEl.innerHTML =
     hand.length > 0
@@ -136,17 +133,55 @@ function render(): void {
 }
 
 function renderCard(card: VisibleCardInstance): string {
+  const targeting = getCardTargeting(card);
+  const targetControl = renderTargetControl(card, targeting);
+  const isPlayDisabled = targeting.requiresTarget && getTargetOptions(targeting).length === 0;
+
   return `
     <article class="card">
       <div class="card-cost">${card.cost ?? 0}</div>
       <h3>${escapeHtml(card.name ?? card.cardId)}</h3>
       <p>${escapeHtml(card.description ?? "")}</p>
+      <div class="card-meta">
+        <span>${targetingLabel(targeting)}</span>
+      </div>
+      ${targetControl}
       <div class="card-actions">
-        <button type="button" data-play="${card.instanceId}">Play</button>
+        <button type="button" data-play="${card.instanceId}" ${isPlayDisabled ? "disabled" : ""}>Play</button>
         <button type="button" data-discard="${card.instanceId}">Discard</button>
       </div>
     </article>
   `;
+}
+
+function renderTargetControl(card: VisibleCardInstance, targeting: CardTargeting): string {
+  if (!targeting.requiresTarget) {
+    return "";
+  }
+
+  const options = getTargetOptions(targeting);
+  if (options.length === 0) {
+    return `<p class="muted card-target-empty">No valid target</p>`;
+  }
+
+  return `
+    <label class="card-target">
+      Target
+      <select data-target-for="${escapeHtml(card.instanceId)}">
+        ${options
+          .map((id) => `<option value="${id}">${escapeHtml(localState!.players[id].name)} (${id})</option>`)
+          .join("")}
+      </select>
+    </label>
+  `;
+}
+
+function getTargetOptions(targeting: CardTargeting): string[] {
+  if (!localState || !playerId) {
+    return [];
+  }
+
+  return getSelectableTargetIds(localState, playerId, targeting);
 }
 
 handEl.addEventListener("click", (event) => {
@@ -157,12 +192,21 @@ handEl.addEventListener("click", (event) => {
 
   const playId = target.dataset.play;
   if (playId) {
+    const card = findVisibleHandCard(playId);
+    const selectedTargetId = selectedTargetForCard(playId);
+    const targeting = card ? getCardTargeting(card) : null;
+
+    if (targeting?.requiresTarget && !selectedTargetId) {
+      addLog({ type: "LOCAL_NOTICE", payload: { message: "No valid target selected." } });
+      return;
+    }
+
     send({
       type: "PLAY_CARD",
       requestId: requestId(),
       payload: {
         cardInstanceId: playId,
-        targetId: targetSelect.value || undefined
+        targetId: selectedTargetId
       }
     });
     return;
@@ -187,6 +231,20 @@ function send(command: unknown): void {
   }
 
   socket.send(JSON.stringify(command));
+}
+
+function findVisibleHandCard(cardInstanceId: string): VisibleCardInstance | undefined {
+  if (!localState || !playerId) {
+    return undefined;
+  }
+
+  return (localState.zones.hand[playerId] ?? []).find((card) => card.instanceId === cardInstanceId);
+}
+
+function selectedTargetForCard(cardInstanceId: string): string | undefined {
+  const select = Array.from(handEl.querySelectorAll<HTMLSelectElement>("select[data-target-for]"))
+    .find((candidate) => candidate.dataset.targetFor === cardInstanceId);
+  return select?.value || undefined;
 }
 
 function addLog(message: NetworkMessage | GameEvent): void {
@@ -239,4 +297,20 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function targetingLabel(targeting: CardTargeting): string {
+  const scope = {
+    SELF: "Self",
+    ALLY: "Ally",
+    ENEMY: "Enemy",
+    ANY: "Any"
+  }[targeting.scope];
+  const selection = {
+    NONE: "No target",
+    SINGLE: "Single",
+    GROUP: "Group"
+  }[targeting.selection];
+
+  return `${scope} · ${selection}`;
 }
