@@ -6,12 +6,18 @@ import type {
   CardTargetSelection,
   CardType
 } from "../types/card.js";
-import type { CardCatalog } from "../types/cardCatalog.js";
+import type {
+  CardCatalog,
+  CardTransformRevertTiming,
+  CardTransformRule,
+  CardTransformScope
+} from "../types/cardCatalog.js";
 import { defaultTargetingForEffect } from "../rules/cardTargets.js";
 
 export type CardCatalogCsvInput = {
   cardsCsv: string;
   starterDeckCsv: string;
+  transformRulesCsv?: string;
   version: string;
 };
 
@@ -21,9 +27,11 @@ type CsvRecord = {
 };
 
 const CARD_TYPES = new Set(["ATTACK", "SKILL", "ITEM", "STATUS"]);
-const EFFECT_TYPES = new Set(["DAMAGE", "HEAL", "DRAW"]);
+const EFFECT_TYPES = new Set(["NONE", "DAMAGE", "HEAL", "DRAW"]);
 const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
 const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
+const TRANSFORM_SCOPES = new Set(["OWNER_HAND"]);
+const TRANSFORM_REVERT_TIMINGS = new Set(["NEVER", "TURN_END"]);
 
 export function normalizePublishedCsvUrl(url: string): string {
   const parsedUrl = new URL(url);
@@ -50,6 +58,9 @@ export function normalizePublishedCsvUrl(url: string): string {
 export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog {
   const cardDefinitions = parseCardsCsv(input.cardsCsv);
   const starterDeckCardIds = parseStarterDeckCsv(input.starterDeckCsv, cardDefinitions);
+  const transformRules = input.transformRulesCsv
+    ? parseTransformRulesCsv(input.transformRulesCsv, cardDefinitions)
+    : [];
 
   if (starterDeckCardIds.length === 0) {
     throw new Error("starter_deck.csv must contain at least one enabled card.");
@@ -58,7 +69,8 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
   return {
     version: input.version,
     cardDefinitions,
-    starterDeckCardIds
+    starterDeckCardIds,
+    transformRules
   };
 }
 
@@ -67,6 +79,7 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
   const version = readRequiredString(catalog.version, "version", source);
   const definitionsRecord = readRecord(catalog.cardDefinitions, `${source}.cardDefinitions`);
   const starterDeckValue = catalog.starterDeckCardIds;
+  const transformRulesValue = catalog.transformRules ?? [];
 
   if (!Array.isArray(starterDeckValue)) {
     throw new Error(`${source}.starterDeckCardIds must be an array.`);
@@ -97,10 +110,17 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     throw new Error(`${source}.starterDeckCardIds must contain at least one card.`);
   }
 
+  const transformRules = parseTransformRulesJson(
+    transformRulesValue,
+    cardDefinitions,
+    `${source}.transformRules`
+  );
+
   return {
     version,
     cardDefinitions,
-    starterDeckCardIds
+    starterDeckCardIds,
+    transformRules
   };
 }
 
@@ -168,6 +188,90 @@ function parseStarterDeckCsv(
   return starterDeckCardIds;
 }
 
+function parseTransformRulesCsv(
+  csvText: string,
+  cardDefinitions: Record<string, CardDefinition>
+): CardTransformRule[] {
+  const records = parseCsvRecords(
+    csvText,
+    [
+      "ruleId",
+      "triggerCardId",
+      "sourceCardId",
+      "targetCardId",
+      "scope",
+      "reversible",
+      "revertTiming"
+    ],
+    "transform_rules.csv"
+  );
+  const rules: CardTransformRule[] = [];
+  const seenRuleIds = new Set<string>();
+
+  for (const record of records) {
+    const source = `transform_rules.csv row ${record.rowNumber}`;
+    const rule = validateTransformRule(
+      {
+        ruleId: readRequiredString(record.values.ruleId, "ruleId", source),
+        triggerCardId: readRequiredString(record.values.triggerCardId, "triggerCardId", source),
+        sourceCardId: readRequiredString(record.values.sourceCardId, "sourceCardId", source),
+        targetCardId: readRequiredString(record.values.targetCardId, "targetCardId", source),
+        scope: parseTransformScope(record.values.scope, "scope", source),
+        reversible: parseBoolean(record.values.reversible, "reversible", source),
+        revertTiming: parseTransformRevertTiming(record.values.revertTiming, "revertTiming", source)
+      },
+      cardDefinitions,
+      source
+    );
+
+    if (seenRuleIds.has(rule.ruleId)) {
+      throw new Error(`${source} duplicates ruleId "${rule.ruleId}".`);
+    }
+
+    seenRuleIds.add(rule.ruleId);
+    rules.push(rule);
+  }
+
+  return rules;
+}
+
+function parseTransformRulesJson(
+  value: unknown,
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): CardTransformRule[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source} must be an array.`);
+  }
+
+  const seenRuleIds = new Set<string>();
+
+  return value.map((rawRule, index) => {
+    const ruleSource = `${source}[${index}]`;
+    const record = readRecord(rawRule, ruleSource);
+    const rule = validateTransformRule(
+      {
+        ruleId: readRequiredString(record.ruleId, "ruleId", ruleSource),
+        triggerCardId: readRequiredString(record.triggerCardId, "triggerCardId", ruleSource),
+        sourceCardId: readRequiredString(record.sourceCardId, "sourceCardId", ruleSource),
+        targetCardId: readRequiredString(record.targetCardId, "targetCardId", ruleSource),
+        scope: parseTransformScope(record.scope, "scope", ruleSource),
+        reversible: parseBoolean(record.reversible, "reversible", ruleSource),
+        revertTiming: parseTransformRevertTiming(record.revertTiming, "revertTiming", ruleSource)
+      },
+      cardDefinitions,
+      ruleSource
+    );
+
+    if (seenRuleIds.has(rule.ruleId)) {
+      throw new Error(`${ruleSource} duplicates ruleId "${rule.ruleId}".`);
+    }
+
+    seenRuleIds.add(rule.ruleId);
+    return rule;
+  });
+}
+
 function parseCardDefinitionRecord(
   record: Record<string, unknown>,
   source: string
@@ -205,6 +309,10 @@ function parseCardDefinitionJsonRecord(
 function parseEffect(record: Record<string, unknown>, source: string): CardEffectDefinition {
   const effectType = parseEffectType(record.effectType, "effectType", source);
 
+  if (effectType === "NONE") {
+    return { type: "NONE" };
+  }
+
   if (effectType === "DRAW") {
     const rawCount = readOptionalString(record.effectCount) || readOptionalString(record.effectValue);
     return {
@@ -222,6 +330,10 @@ function parseEffect(record: Record<string, unknown>, source: string): CardEffec
 function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
   const record = readRecord(value, source);
   const effectType = parseEffectType(record.type, "type", source);
+
+  if (effectType === "NONE") {
+    return { type: "NONE" };
+  }
 
   if (effectType === "DRAW") {
     return {
@@ -293,6 +405,34 @@ function parseTargetingJson(
   );
 }
 
+function validateTransformRule(
+  rule: CardTransformRule,
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): CardTransformRule {
+  if (rule.sourceCardId === rule.targetCardId) {
+    throw new Error(`${source} targetCardId must be different from sourceCardId.`);
+  }
+
+  if (!cardDefinitions[rule.triggerCardId]) {
+    throw new Error(`${source} triggerCardId references unknown cardId "${rule.triggerCardId}".`);
+  }
+
+  if (!cardDefinitions[rule.sourceCardId]) {
+    throw new Error(`${source} sourceCardId references unknown cardId "${rule.sourceCardId}".`);
+  }
+
+  if (!cardDefinitions[rule.targetCardId]) {
+    throw new Error(`${source} targetCardId references unknown cardId "${rule.targetCardId}".`);
+  }
+
+  if (!rule.reversible && rule.revertTiming !== "NEVER") {
+    throw new Error(`${source} revertTiming must be NEVER when reversible is false.`);
+  }
+
+  return rule;
+}
+
 function parseCardType(value: unknown, source: string): CardType {
   const cardType = readRequiredString(value, "type", source).toUpperCase();
 
@@ -311,10 +451,40 @@ function parseEffectType(
   const effectType = readRequiredString(value, field, source).toUpperCase();
 
   if (!EFFECT_TYPES.has(effectType)) {
-    throw new Error(`${source} ${field} must be DAMAGE, HEAL, or DRAW.`);
+    throw new Error(`${source} ${field} must be NONE, DAMAGE, HEAL, or DRAW.`);
   }
 
   return effectType as CardEffectDefinition["type"];
+}
+
+function parseTransformScope(
+  value: unknown,
+  field: string,
+  source: string
+): CardTransformScope {
+  const scope = readRequiredString(value, field, source).toUpperCase();
+  const normalizedScope = scope === "HAND" ? "OWNER_HAND" : scope;
+
+  if (!TRANSFORM_SCOPES.has(normalizedScope)) {
+    throw new Error(`${source} ${field} must be HAND or OWNER_HAND.`);
+  }
+
+  return normalizedScope as CardTransformScope;
+}
+
+function parseTransformRevertTiming(
+  value: unknown,
+  field: string,
+  source: string
+): CardTransformRevertTiming {
+  const timing = readOptionalString(value).toUpperCase();
+  const normalizedTiming = timing === "" || timing === "NONE" ? "NEVER" : timing;
+
+  if (!TRANSFORM_REVERT_TIMINGS.has(normalizedTiming)) {
+    throw new Error(`${source} ${field} must be NEVER or TURN_END.`);
+  }
+
+  return normalizedTiming as CardTransformRevertTiming;
 }
 
 function parseTargetSelection(

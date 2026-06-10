@@ -6,10 +6,11 @@ import {
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
 import type { CardDefinition, CardInstance } from "../shared/types/card.js";
-import type { CardCatalog } from "../shared/types/cardCatalog.js";
+import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
+  CardTransformedEvent,
   GameEvent,
   GameStateSyncEvent,
   JoinAcceptedEvent
@@ -22,13 +23,25 @@ const INITIAL_HP = 20;
 const INITIAL_HAND_SIZE = 3;
 const MAX_ENERGY_CAP = 10;
 
+type PendingCardRevert = {
+  ruleId: string;
+  playerId: string;
+  sourceId: string;
+  cardInstanceId: string;
+  sourceCardId: string;
+  targetCardId: string;
+  revertTiming: Exclude<CardTransformRevertTiming, "NEVER">;
+};
+
 export class GameStateStore {
   readonly cardDefinitions: Record<string, CardDefinition>;
   readonly cardCatalogVersion: string;
 
+  private readonly transformRules: CardTransformRule[];
   private readonly deckManager: DeckManager;
   private readonly snapshotService: SnapshotService;
   private readonly state: GameState;
+  private pendingCardReverts: PendingCardRevert[] = [];
   private nextPlayerNumber = 1;
 
   constructor(
@@ -37,6 +50,7 @@ export class GameStateStore {
   ) {
     this.cardDefinitions = cardCatalog.cardDefinitions;
     this.cardCatalogVersion = cardCatalog.version;
+    this.transformRules = cardCatalog.transformRules ?? [];
     this.deckManager = new DeckManager(cardCatalog.starterDeckCardIds);
     this.snapshotService = new SnapshotService(this.cardDefinitions);
     this.state = {
@@ -197,6 +211,7 @@ export class GameStateStore {
         drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
       })
     );
+    events.push(...this.applyTransformRules(playerId, card));
 
     return events;
   }
@@ -237,6 +252,7 @@ export class GameStateStore {
         }
       }
     ];
+    events.push(...this.revertPendingCardTransforms(playerId, "TURN_END"));
 
     const currentIndex = this.state.playerOrder.indexOf(playerId);
     const nextIndex = (currentIndex + 1) % this.state.playerOrder.length;
@@ -276,6 +292,7 @@ export class GameStateStore {
     this.state.status = "PLAYING";
     this.state.turn = 1;
     this.state.winnerId = null;
+    this.pendingCardReverts = [];
 
     for (const playerId of this.state.playerOrder) {
       const player = this.state.players[playerId];
@@ -353,6 +370,111 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  private applyTransformRules(playerId: string, triggerCard: CardInstance): CardTransformedEvent[] {
+    const events: CardTransformedEvent[] = [];
+    const rules = this.transformRules.filter((rule) => rule.triggerCardId === triggerCard.cardId);
+
+    for (const rule of rules) {
+      const cards = this.getCardsInTransformScope(playerId, rule);
+      for (const card of cards) {
+        if (card.cardId !== rule.sourceCardId) {
+          continue;
+        }
+
+        events.push(this.transformCard(playerId, card, rule, triggerCard.instanceId, rule.targetCardId));
+
+        if (rule.reversible && rule.revertTiming !== "NEVER") {
+          this.pendingCardReverts.push({
+            ruleId: rule.ruleId,
+            playerId,
+            sourceId: triggerCard.instanceId,
+            cardInstanceId: card.instanceId,
+            sourceCardId: rule.sourceCardId,
+            targetCardId: rule.targetCardId,
+            revertTiming: rule.revertTiming
+          });
+        }
+      }
+    }
+
+    return events;
+  }
+
+  private revertPendingCardTransforms(
+    playerId: string,
+    revertTiming: Exclude<CardTransformRevertTiming, "NEVER">
+  ): CardTransformedEvent[] {
+    const events: CardTransformedEvent[] = [];
+    const remainingReverts: PendingCardRevert[] = [];
+
+    for (const pending of this.pendingCardReverts) {
+      if (pending.playerId !== playerId || pending.revertTiming !== revertTiming) {
+        remainingReverts.push(pending);
+        continue;
+      }
+
+      const card = (this.state.zones.hand[playerId] ?? []).find(
+        (candidate) => candidate.instanceId === pending.cardInstanceId
+      );
+
+      if (card?.cardId === pending.targetCardId) {
+        events.push(
+          this.transformCard(
+            playerId,
+            card,
+            {
+              ruleId: pending.ruleId,
+              triggerCardId: pending.sourceCardId,
+              sourceCardId: pending.targetCardId,
+              targetCardId: pending.sourceCardId,
+              scope: "OWNER_HAND",
+              reversible: false,
+              revertTiming: "NEVER"
+            },
+            pending.sourceId,
+            pending.sourceCardId
+          )
+        );
+      }
+    }
+
+    this.pendingCardReverts = remainingReverts;
+    return events;
+  }
+
+  private transformCard(
+    playerId: string,
+    card: CardInstance,
+    rule: CardTransformRule,
+    sourceId: string,
+    targetCardId: string
+  ): CardTransformedEvent {
+    const previousCardId = card.cardId;
+    card.cardId = targetCardId;
+
+    return {
+      type: "CARD_TRANSFORMED",
+      seq: this.nextSeq(),
+      payload: {
+        playerId,
+        ruleId: rule.ruleId,
+        sourceId,
+        cardInstanceId: card.instanceId,
+        privateCardData: {
+          previousCardId,
+          cardId: targetCardId
+        }
+      }
+    };
+  }
+
+  private getCardsInTransformScope(playerId: string, rule: CardTransformRule): CardInstance[] {
+    switch (rule.scope) {
+      case "OWNER_HAND":
+        return this.state.zones.hand[playerId] ?? [];
+    }
   }
 
   private canStartGame(): boolean {

@@ -130,6 +130,21 @@ export type CardDiscardedEvent = {
   };
 };
 
+export type CardTransformedEvent = {
+  type: "CARD_TRANSFORMED";
+  seq: number;
+  payload: {
+    playerId: string;
+    ruleId: string;
+    sourceId: string;
+    cardInstanceId: string;
+    privateCardData?: {
+      previousCardId: string;
+      cardId: string;
+    };
+  };
+};
+
 export type DamageAppliedEvent = {
   type: "DAMAGE_APPLIED";
   seq: number;
@@ -206,6 +221,7 @@ export type GameEvent =
   | CardDrawnEvent
   | CardPlayedEvent
   | CardDiscardedEvent
+  | CardTransformedEvent
   | DamageAppliedEvent
   | HealAppliedEvent
   | TurnStartedEvent

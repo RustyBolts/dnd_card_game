@@ -2,6 +2,7 @@ import { CommandError } from "../src/host/CommandError.js";
 import { CommandRouter } from "../src/host/CommandRouter.js";
 import { CommandValidator } from "../src/host/CommandValidator.js";
 import { GameStateStore } from "../src/host/GameStateStore.js";
+import { redactPrivateEvent } from "../src/shared/rules/eventPrivacy.js";
 import type { GameCommand, GameEvent, NetworkMessage } from "../src/shared/types/network.js";
 import {
   loadWorkerCardCatalog,
@@ -15,6 +16,7 @@ export type Env = {
   CARD_CATALOG_KEY?: string;
   CARD_CARDS_CSV_URL?: string;
   CARD_STARTER_DECK_CSV_URL?: string;
+  CARD_TRANSFORM_RULES_CSV_URL?: string;
   CARD_CATALOG_ADMIN_TOKEN?: string;
 };
 
@@ -47,7 +49,8 @@ export default {
           status: "ok",
           version: catalog.version,
           cardCount: Object.keys(catalog.cardDefinitions).length,
-          starterDeckSize: catalog.starterDeckCardIds.length
+          starterDeckSize: catalog.starterDeckCardIds.length,
+          transformRuleCount: catalog.transformRules.length
         });
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "Unable to sync card catalog." }, 500);
@@ -227,7 +230,10 @@ export class GameRoom {
   private broadcast(events: GameEvent[]): void {
     for (const event of events) {
       for (const [socket, playerId] of this.connections.entries()) {
-        this.send(socket, redactPrivateEvent(event, playerId));
+        const visibleEvent = redactPrivateEvent(event, playerId);
+        if (visibleEvent) {
+          this.send(socket, visibleEvent);
+        }
       }
     }
   }
@@ -258,6 +264,7 @@ function cardCatalogResponse(result: WorkerCardCatalogResult): Record<string, un
     version: result.catalog.version,
     cardCount: Object.keys(result.catalog.cardDefinitions).length,
     starterDeckSize: result.catalog.starterDeckCardIds.length,
+    transformRuleCount: result.catalog.transformRules.length,
     cardDefinitions: result.catalog.cardDefinitions
   };
 }
@@ -272,20 +279,6 @@ function authorizeAdmin(request: Request, env: Env): Response | null {
   }
 
   return null;
-}
-
-function redactPrivateEvent(event: GameEvent, recipientPlayerId: string): GameEvent {
-  if (event.type !== "CARD_DRAWN" || event.payload.playerId === recipientPlayerId) {
-    return event;
-  }
-
-  return {
-    ...event,
-    payload: {
-      playerId: event.payload.playerId,
-      cardInstanceId: event.payload.cardInstanceId
-    }
-  };
 }
 
 function json(body: unknown, status = 200): Response {

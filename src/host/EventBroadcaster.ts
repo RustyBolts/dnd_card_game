@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { redactPrivateEvent } from "../shared/rules/eventPrivacy.js";
 import type { GameEvent } from "../shared/types/network.js";
 import { GameStateStore } from "./GameStateStore.js";
 
@@ -21,7 +22,10 @@ export class EventBroadcaster {
   broadcast(events: GameEvent[]): void {
     for (const event of events) {
       for (const [socket, playerId] of this.getConnections()) {
-        this.send(socket, redactPrivateEvent(event, playerId));
+        const visibleEvent = redactPrivateEvent(event, playerId);
+        if (visibleEvent) {
+          this.send(socket, visibleEvent);
+        }
       }
     }
   }
@@ -35,18 +39,4 @@ export class EventBroadcaster {
   sendSnapshot(socket: WebSocket, playerId: string): void {
     this.send(socket, this.store.createSnapshotEvent(playerId));
   }
-}
-
-function redactPrivateEvent(event: GameEvent, recipientPlayerId: string): GameEvent {
-  if (event.type !== "CARD_DRAWN" || event.payload.playerId === recipientPlayerId) {
-    return event;
-  }
-
-  return {
-    ...event,
-    payload: {
-      playerId: event.payload.playerId,
-      cardInstanceId: event.payload.cardInstanceId
-    }
-  };
 }

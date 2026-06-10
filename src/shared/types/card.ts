@@ -3,6 +3,7 @@ export type CardType = "ATTACK" | "SKILL" | "ITEM" | "STATUS";
 export type CardZone = "DECK" | "HAND" | "BOARD" | "GRAVEYARD" | "EXILE";
 
 export type CardEffectDefinition =
+  | { type: "NONE" }
   | { type: "DAMAGE"; value: number }
   | { type: "HEAL"; value: number }
   | { type: "DRAW"; count: number };

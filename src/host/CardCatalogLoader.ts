@@ -7,12 +7,14 @@ import type { CardCatalog } from "../shared/types/cardCatalog.js";
 export type HostCardCatalogLoadOptions = {
   cardsCsvPath?: string;
   starterDeckCsvPath?: string;
+  transformRulesCsvPath?: string;
   version?: string;
   requireExternal?: boolean;
 };
 
 const DEFAULT_CARDS_CSV_PATH = "data/cards.csv";
 const DEFAULT_STARTER_DECK_CSV_PATH = "data/starter_deck.csv";
+const DEFAULT_TRANSFORM_RULES_CSV_PATH = "data/transform_rules.csv";
 
 export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {}): CardCatalog {
   const cardsCsvPath = resolve(
@@ -21,18 +23,27 @@ export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {})
   const starterDeckCsvPath = resolve(
     options.starterDeckCsvPath ?? process.env.STARTER_DECK_CSV_PATH ?? DEFAULT_STARTER_DECK_CSV_PATH
   );
+  const transformRulesCsvPath = resolve(
+    options.transformRulesCsvPath ??
+      process.env.TRANSFORM_RULES_CSV_PATH ??
+      DEFAULT_TRANSFORM_RULES_CSV_PATH
+  );
   const hasCardsCsv = existsSync(cardsCsvPath);
   const hasStarterDeckCsv = existsSync(starterDeckCsvPath);
+  const hasTransformRulesCsv = existsSync(transformRulesCsvPath);
 
   if (hasCardsCsv && hasStarterDeckCsv) {
     return parseCardCatalogFromCsv({
       cardsCsv: readFileSync(cardsCsvPath, "utf8"),
       starterDeckCsv: readFileSync(starterDeckCsvPath, "utf8"),
-      version: options.version ?? `local-csv:${cardsCsvPath}:${starterDeckCsvPath}`
+      transformRulesCsv: hasTransformRulesCsv ? readFileSync(transformRulesCsvPath, "utf8") : undefined,
+      version:
+        options.version ??
+        `local-csv:${cardsCsvPath}:${starterDeckCsvPath}${hasTransformRulesCsv ? `:${transformRulesCsvPath}` : ""}`
     });
   }
 
-  if (options.requireExternal || hasCardsCsv || hasStarterDeckCsv) {
+  if (options.requireExternal || hasCardsCsv || hasStarterDeckCsv || hasTransformRulesCsv) {
     throw new Error(
       `Card catalog CSV files must be provided together. Missing: ${[
         hasCardsCsv ? null : cardsCsvPath,

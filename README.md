@@ -8,7 +8,7 @@ Wi-Fi LAN 回合制卡牌桌遊原型。專案依照附件規格建立，採用 
 - Client 用 `ws://host-ip:port` 加入。
 - 支援 `JOIN_ROOM`、`PLAYER_READY`、`DRAW_CARD`、`PLAY_CARD`、`DISCARD_CARD`、`END_TURN`。
 - Host 驗證目前回合、手牌歸屬、卡牌 zone 與能量費用。
-- 支援傷害、治療、抽牌三種卡牌效果。
+- 支援無直接效果、傷害、治療、抽牌與外部規則觸發的手牌卡牌轉換。
 - 卡片定義包含施放目標規則，可區分自己、敵人單體、任意單體、隊友單體與未來群體目標。
 - 玩家加入時預設依順序分成兩個陣營，供 `ALLY`、`ENEMY` 與 `GROUP` 目標判定使用。
 - Host 針對每個玩家送出可見 snapshot，避免洩漏對手手牌內容。
@@ -79,9 +79,10 @@ Node host 可選擇讀取本機 CSV：
 ```txt
 data/cards.csv
 data/starter_deck.csv
+data/transform_rules.csv
 ```
 
-這兩個 CSV 只是本機測試或上傳 Google Spreadsheet 時的暫存資料，`data/` 已加入 `.gitignore`，不是正式 runtime 依賴。若本機沒有這兩個檔案，Node host 會 fallback 到程式內建的 default catalog。
+這些 CSV 只是本機測試或上傳 Google Spreadsheet 時的暫存資料，`data/` 已加入 `.gitignore`，不是正式 runtime 依賴。若本機沒有 `cards.csv` 與 `starter_deck.csv`，Node host 會 fallback 到程式內建的 default catalog。`transform_rules.csv` 可省略。
 
 詳細流程請看：
 
@@ -123,12 +124,13 @@ KV binding: CARD_CATALOG_KV
 Variables:
   CARD_CARDS_CSV_URL=<published cards CSV URL>
   CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
   CARD_CATALOG_KEY=card-catalog:active
 Secret:
   CARD_CATALOG_ADMIN_TOKEN
 ```
 
-`CARD_CATALOG_KEY` 可省略，未設定時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
+`CARD_TRANSFORM_RULES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 transform rules URL 時代表沒有外部卡牌轉換規則，沒有 catalog key 時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 
 ```bash
 npx wrangler deploy --keep-vars
@@ -188,5 +190,6 @@ docs/
 - Client 不直接推測結果，只接受 Host event / snapshot。
 
 ## 更新
-2026/06/05 完成首次網頁部署
-2026/06/08 資料讀入改用 cloudflare kv 暫存
+- 2026/06/05 完成首次網頁部署
+- 2026/06/08 資料讀入改用 cloudflare kv 暫存
+- 2026/06/10 加入卡牌變化功能

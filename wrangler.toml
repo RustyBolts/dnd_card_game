@@ -9,6 +9,7 @@ enabled = true
 [vars]
 CARD_CARDS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTjZ6vCBGnVnho6axFA6mJTF2NpWL03IOSLF9Rhwittqq7HTgm3H4uieQZpwD6gSd9nhjjN3kG7TFPe/pub?gid=1807538627&single=true&output=csv"
 CARD_STARTER_DECK_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTjZ6vCBGnVnho6axFA6mJTF2NpWL03IOSLF9Rhwittqq7HTgm3H4uieQZpwD6gSd9nhjjN3kG7TFPe/pub?gid=706545121&single=true&output=csv"
+CARD_TRANSFORM_RULES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTjZ6vCBGnVnho6axFA6mJTF2NpWL03IOSLF9Rhwittqq7HTgm3H4uieQZpwD6gSd9nhjjN3kG7TFPe/pub?gid=2061142189&single=true&output=csv"
 
 [[durable_objects.bindings]]
 name = "GAME_ROOMS"

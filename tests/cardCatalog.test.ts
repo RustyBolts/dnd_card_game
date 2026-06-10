@@ -30,6 +30,7 @@ describe("card catalog data source", () => {
     });
 
     expect(catalog.version).toBe("test");
+    expect(catalog.transformRules).toEqual([]);
     expect(catalog.cardDefinitions.fireball).toEqual({
       cardId: "fireball",
       name: "火球術",
@@ -81,6 +82,239 @@ describe("card catalog data source", () => {
       scope: "ENEMY",
       requiresTarget: true
     });
+  });
+
+  it("parses reversible hand-card transform rules from CSV data", () => {
+    const catalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+        "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+        "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n" +
+        "bear_form,Bear Form,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,true\n",
+      starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\nbear_form,1\n",
+      transformRulesCsv:
+        "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+        "T001,stance_shift,wolf_form,bear_form,hand,true,turn_end\n",
+      version: "transform-csv"
+    });
+
+    expect(catalog.cardDefinitions.stance_shift.effect).toEqual({ type: "NONE" });
+    expect(catalog.transformRules).toEqual([{
+      ruleId: "T001",
+      triggerCardId: "stance_shift",
+      sourceCardId: "wolf_form",
+      targetCardId: "bear_form",
+      scope: "OWNER_HAND",
+      reversible: true,
+      revertTiming: "TURN_END"
+    }]);
+    expect(parseCardCatalogJson(JSON.parse(JSON.stringify(catalog)), "transform-kv")).toEqual(catalog);
+  });
+
+  it("parses NONE effects for cards that only trigger external rules", () => {
+    const catalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+        "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n",
+      starterDeckCsv: "cardId,count\nstance_shift,1\n",
+      version: "none-effect"
+    });
+
+    expect(catalog.cardDefinitions.stance_shift.effect).toEqual({ type: "NONE" });
+  });
+
+  it("validates a serialized legacy catalog without transform rules", () => {
+    const catalog = parseCardCatalogJson(
+      {
+        version: "legacy-kv",
+        cardDefinitions: {
+          stance_shift: {
+            cardId: "stance_shift",
+            name: "Stance Shift",
+            cost: 0,
+            type: "SKILL",
+            description: "Toggle forms.",
+            effect: { type: "NONE" },
+            targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+          }
+        },
+        starterDeckCardIds: ["stance_shift"]
+      },
+      "legacy-kv"
+    );
+
+    expect(catalog.transformRules).toEqual([]);
+  });
+
+  it("accepts JSON transform rules", () => {
+    const catalog = parseCardCatalogJson(
+      {
+        version: "transform-json",
+        cardDefinitions: {
+          stance_shift: {
+            cardId: "stance_shift",
+            name: "Stance Shift",
+            cost: 0,
+            type: "SKILL",
+            description: "Toggle forms.",
+            effect: { type: "NONE" },
+            targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+          },
+          wolf_form: {
+            cardId: "wolf_form",
+            name: "Wolf Form",
+            cost: 1,
+            type: "ATTACK",
+            description: "Deal 1 damage.",
+            effect: { type: "DAMAGE", value: 1 },
+            targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+          },
+          bear_form: {
+            cardId: "bear_form",
+            name: "Bear Form",
+            cost: 2,
+            type: "ATTACK",
+            description: "Deal 2 damage.",
+            effect: { type: "DAMAGE", value: 2 },
+            targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+          }
+        },
+        starterDeckCardIds: ["stance_shift", "wolf_form", "bear_form"],
+        transformRules: [{
+          ruleId: "T001",
+          triggerCardId: "stance_shift",
+          sourceCardId: "wolf_form",
+          targetCardId: "bear_form",
+          scope: "OWNER_HAND",
+          reversible: true,
+          revertTiming: "TURN_END"
+        }]
+      },
+      "transform-json"
+    );
+
+    expect(catalog.transformRules).toEqual([{
+      ruleId: "T001",
+      triggerCardId: "stance_shift",
+      sourceCardId: "wolf_form",
+      targetCardId: "bear_form",
+      scope: "OWNER_HAND",
+      reversible: true,
+      revertTiming: "TURN_END"
+    }]);
+  });
+
+  it("rejects transform rules that reference unknown card ids", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,missing_form,hand,true,turn_end\n",
+        version: "bad-transform-csv"
+      })
+    ).toThrow(/targetCardId references unknown cardId/);
+  });
+
+  it("rejects non-reversible transform rules with a revert timing", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n" +
+          "bear_form,Bear Form,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\nbear_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,bear_form,hand,false,turn_end\n",
+        version: "bad-revert-csv"
+      })
+    ).toThrow(/revertTiming must be NEVER/);
+  });
+
+  it("rejects duplicate transform rule ids", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n" +
+          "bear_form,Bear Form,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\nbear_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,bear_form,hand,true,turn_end\n" +
+          "T001,stance_shift,wolf_form,bear_form,hand,true,turn_end\n",
+        version: "duplicate-transform-csv"
+      })
+    ).toThrow(/duplicates ruleId/);
+  });
+
+  it("rejects transform rules whose source and target are the same card", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,wolf_form,hand,true,turn_end\n",
+        version: "same-target-csv"
+      })
+    ).toThrow(/targetCardId must be different/);
+  });
+
+  it("rejects transform rules with unsupported scopes", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n" +
+          "bear_form,Bear Form,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\nbear_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,bear_form,deck,true,turn_end\n",
+        version: "bad-scope-csv"
+      })
+    ).toThrow(/scope must be HAND or OWNER_HAND/);
+  });
+
+  it("rejects transform rules with unsupported revert timing", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,NONE,,,NONE,SELF,false,true\n" +
+          "wolf_form,Wolf Form,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true\n" +
+          "bear_form,Bear Form,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\nwolf_form,1\nbear_form,1\n",
+        transformRulesCsv:
+          "ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming\n" +
+          "T001,stance_shift,wolf_form,bear_form,hand,true,next_turn\n",
+        version: "bad-timing-csv"
+      })
+    ).toThrow(/revertTiming must be NEVER or TURN_END/);
+  });
+
+  it("rejects the old card-effect transform schema", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv:
+          "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+          "stance_shift,Stance Shift,0,SKILL,Toggle forms.,TRANSFORM_HAND_CARDS,,,NONE,SELF,false,true\n",
+        starterDeckCsv: "cardId,count\nstance_shift,1\n",
+        version: "old-transform-effect"
+      })
+    ).toThrow(/effectType must be NONE, DAMAGE, HEAL, or DRAW/);
   });
 
   it("normalizes Google Sheets published HTML URLs to CSV URLs", () => {

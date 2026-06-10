@@ -44,6 +44,10 @@ export function resolveCardEffect(context: EffectContext): EffectEvent[] {
     return resolveHeal(effect, context);
   }
 
+  if (effect.type === "NONE") {
+    return [];
+  }
+
   return context.drawCards(context.playerId, effect.count);
 }
 

@@ -18,17 +18,19 @@ Google Spreadsheet
 
 ## CSV 檔案
 
-本機可選擇保留兩個 CSV 作為測試或上傳 Google Spreadsheet 的暫存資料：
+本機可選擇保留 CSV 作為測試或上傳 Google Spreadsheet 的暫存資料：
 
 - `data/cards.csv`
 - `data/starter_deck.csv`
+- `data/transform_rules.csv`（可選）
 
 `data/` 已加入 `.gitignore`，不納入 git，也不是 Cloudflare runtime 的必要資料來源。Cloudflare Worker 實際讀取的是 `wrangler.toml` / Worker variables 中設定的 Google Spreadsheet CSV URL。
 
-Google Spreadsheet 建議建立兩個工作表：
+Google Spreadsheet 建議建立三個工作表：
 
 - `cards`
 - `starter_deck`
+- `transform_rules`（可選）
 
 ### `cards` 欄位
 
@@ -41,7 +43,7 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 - `cost`：整數，必須 >= 0。
 - `type`：`ATTACK`、`SKILL`、`ITEM` 或 `STATUS`。
 - `description`：顯示文字。
-- `effectType`：`DAMAGE`、`HEAL` 或 `DRAW`。
+- `effectType`：`NONE`、`DAMAGE`、`HEAL` 或 `DRAW`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。
 - `effectValue`：`DAMAGE`、`HEAL` 使用的數值。
 - `effectCount`：`DRAW` 使用的抽牌張數。
 - `targetSelection`：`NONE`、`SINGLE` 或 `GROUP`。
@@ -71,6 +73,40 @@ cardId,count
 - `cardId` 必須存在於啟用中的 `cards`。
 - `count` 會展開成 starter deck 中的卡片張數。
 
+### `transform_rules` 欄位
+
+```txt
+ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming
+```
+
+- `ruleId`：穩定唯一 ID，用於事件、測試與除錯。
+- `triggerCardId`：打出哪張卡時觸發規則。
+- `sourceCardId`：被轉換前的卡牌 ID。
+- `targetCardId`：轉換後的卡牌 ID，必須與 `sourceCardId` 不同。
+- `scope`：目前支援 `hand` 或 `OWNER_HAND`，代表觸發者自己的手牌。
+- `reversible`：`true` 表示此轉換會依 `revertTiming` 還原；`false` 表示不會自動還原。
+- `revertTiming`：目前支援 `turn_end` 或 `NEVER`。`reversible=false` 時必須是 `NEVER` 或空白。
+
+玩家打出 `triggerCardId` 後，Host/Worker 會掃描規則 scope 中符合 `sourceCardId` 的 card instance，保留同一個 `instanceId` 並把 `cardId` 改成 `targetCardId`。若 `reversible=true` 且 `revertTiming=turn_end`，該 instance 在觸發者回合結束時仍在手牌中才會還原成 `sourceCardId`；若已經被打出或丟棄，則不再還原。
+
+`CARD_TRANSFORMED` event 只會送給該手牌的持有者。其他玩家不會收到這類事件，避免從事件數量或 ruleId 反推出對手手牌內容。
+
+範例：
+
+```txt
+ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming
+T001,stance_shift,wolf_form,bear_form,hand,true,turn_end
+```
+
+對應的觸發卡可以是沒有直接效果的 `NONE` 卡：
+
+```txt
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled
+stance_shift,姿態轉換,0,SKILL,手牌中的狼形態暫時變成熊形態。,NONE,,,NONE,SELF,false,true
+wolf_form,狼形態,1,ATTACK,對一名目標造成 1 點傷害。,DAMAGE,1,,SINGLE,ENEMY,true,true
+bear_form,熊形態,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,true
+```
+
 ## 本機 Node Host
 
 `npm run dev:host` 預設讀取 seed CSV：
@@ -82,10 +118,10 @@ npm run dev:host -- --port 7777
 測試其他 CSV 匯出檔時可以指定路徑：
 
 ```bash
-npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv
+npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --transform-rules-csv /path/to/transform_rules.csv
 ```
 
-如果兩個 CSV 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個 CSV，啟動會失敗，因為 card catalog 不完整。
+如果 `cards.csv` 與 `starter_deck.csv` 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個，或只有 `transform_rules.csv`，啟動會失敗，因為 card catalog 不完整。`transform_rules.csv` 可省略；省略時代表沒有外部轉換規則。
 
 ## Cloudflare Worker 設定
 
@@ -100,10 +136,11 @@ CARD_CATALOG_KV
 ```txt
 CARD_CARDS_CSV_URL=<published cards CSV URL>
 CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
 CARD_CATALOG_KEY=card-catalog:active
 ```
 
-`CARD_CATALOG_KEY` 可省略；未設定時程式會使用 `card-catalog:active`。
+`CARD_TRANSFORM_RULES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
 
 如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 

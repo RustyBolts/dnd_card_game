@@ -78,7 +78,8 @@ describe("card effects", () => {
           targeting: { selection: "SINGLE", scope: "ANY", requiresTarget: true }
         }
       },
-      starterDeckCardIds: ["focus"]
+      starterDeckCardIds: ["focus"],
+      transformRules: []
     };
     const store = createStartedGame(selfTargetCatalog);
     const state = store.getState();
@@ -207,6 +208,53 @@ describe("card effects", () => {
     expect(events.filter((event) => event.type === "CARD_DRAWN")).toHaveLength(2);
     expect(state.zones.hand[playerId].length).toBe(handBefore + 2);
   });
+
+  it("applies transform rules when the trigger card is played and reverts them at turn end", () => {
+    const store = createStartedGame(createTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_catalyst",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const bearForm: CardInstance = {
+      instanceId: "test_bear_form",
+      cardId: "bear_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.zones.hand[playerId] = [catalyst, wolfForm, bearForm];
+
+    const events = store.playCard(playerId, catalyst.instanceId);
+    const transformEvents = events.filter((event) => event.type === "CARD_TRANSFORMED");
+
+    expect(transformEvents).toHaveLength(1);
+    expect(wolfForm.cardId).toBe("bear_form");
+    expect(bearForm.cardId).toBe("bear_form");
+    expect(transformEvents.map((event) => event.payload.privateCardData)).toEqual([
+      { previousCardId: "wolf_form", cardId: "bear_form" }
+    ]);
+    expect(transformEvents[0]?.payload.ruleId).toBe("T001");
+
+    const turnEvents = store.endTurn(playerId);
+    const revertEvents = turnEvents.filter((event) => event.type === "CARD_TRANSFORMED");
+
+    expect(revertEvents).toHaveLength(1);
+    expect(wolfForm.cardId).toBe("wolf_form");
+    expect(revertEvents[0]?.payload.privateCardData).toEqual({
+      previousCardId: "bear_form",
+      cardId: "wolf_form"
+    });
+  });
 });
 
 function createExternalHealingCatalog(): CardCatalog {
@@ -227,4 +275,49 @@ function createGroupDamageCatalog(targetRequired = "false"): CardCatalog {
     starterDeckCsv: "cardId,count\nflame_wave,1\n",
     version: "external-group-test"
   });
+}
+
+function createTransformCatalog(): CardCatalog {
+  return {
+    version: "transform-test",
+    cardDefinitions: {
+      stance_shift: {
+        cardId: "stance_shift",
+        name: "Stance Shift",
+        cost: 0,
+        type: "SKILL",
+        description: "Transform wolf forms into bear forms until end of turn.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      wolf_form: {
+        cardId: "wolf_form",
+        name: "Wolf Form",
+        cost: 1,
+        type: "ATTACK",
+        description: "Deal 1 damage.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      bear_form: {
+        cardId: "bear_form",
+        name: "Bear Form",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 2 damage.",
+        effect: { type: "DAMAGE", value: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      }
+    },
+    starterDeckCardIds: ["stance_shift", "wolf_form", "bear_form"],
+    transformRules: [{
+      ruleId: "T001",
+      triggerCardId: "stance_shift",
+      sourceCardId: "wolf_form",
+      targetCardId: "bear_form",
+      scope: "OWNER_HAND",
+      reversible: true,
+      revertTiming: "TURN_END"
+    }]
+  };
 }
