@@ -8,6 +8,7 @@ export type HostCardCatalogLoadOptions = {
   cardsCsvPath?: string;
   starterDeckCsvPath?: string;
   transformRulesCsvPath?: string;
+  racesCsvPath?: string;
   version?: string;
   requireExternal?: boolean;
 };
@@ -15,6 +16,7 @@ export type HostCardCatalogLoadOptions = {
 const DEFAULT_CARDS_CSV_PATH = "data/cards.csv";
 const DEFAULT_STARTER_DECK_CSV_PATH = "data/starter_deck.csv";
 const DEFAULT_TRANSFORM_RULES_CSV_PATH = "data/transform_rules.csv";
+const DEFAULT_RACES_CSV_PATH = "data/races.csv";
 
 export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {}): CardCatalog {
   const cardsCsvPath = resolve(
@@ -28,18 +30,21 @@ export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {})
       process.env.TRANSFORM_RULES_CSV_PATH ??
       DEFAULT_TRANSFORM_RULES_CSV_PATH
   );
+  const racesCsvPath = resolve(options.racesCsvPath ?? process.env.RACES_CSV_PATH ?? DEFAULT_RACES_CSV_PATH);
   const hasCardsCsv = existsSync(cardsCsvPath);
   const hasStarterDeckCsv = existsSync(starterDeckCsvPath);
   const hasTransformRulesCsv = existsSync(transformRulesCsvPath);
+  const hasRacesCsv = existsSync(racesCsvPath);
 
   if (hasCardsCsv && hasStarterDeckCsv) {
     return parseCardCatalogFromCsv({
       cardsCsv: readFileSync(cardsCsvPath, "utf8"),
       starterDeckCsv: readFileSync(starterDeckCsvPath, "utf8"),
       transformRulesCsv: hasTransformRulesCsv ? readFileSync(transformRulesCsvPath, "utf8") : undefined,
+      racesCsv: hasRacesCsv ? readFileSync(racesCsvPath, "utf8") : undefined,
       version:
         options.version ??
-        `local-csv:${cardsCsvPath}:${starterDeckCsvPath}${hasTransformRulesCsv ? `:${transformRulesCsvPath}` : ""}`
+        `local-csv:${cardsCsvPath}:${starterDeckCsvPath}${hasTransformRulesCsv ? `:${transformRulesCsvPath}` : ""}${hasRacesCsv ? `:${racesCsvPath}` : ""}`
     });
   }
 

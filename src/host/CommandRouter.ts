@@ -6,7 +6,7 @@ export class CommandRouter {
   constructor(private readonly store: GameStateStore) {}
 
   handleJoin(command: Extract<GameCommand, { type: "JOIN_ROOM" }>) {
-    return this.store.addPlayer(command.payload.playerName);
+    return this.store.addPlayer(command.payload.playerName, command.payload.character);
   }
 
   handlePlayerCommand(playerId: string, command: Exclude<GameCommand, { type: "JOIN_ROOM" }>): GameEvent[] {

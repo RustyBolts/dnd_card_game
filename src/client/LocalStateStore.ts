@@ -1,4 +1,5 @@
 import type { CardDefinition } from "../shared/types/card.js";
+import type { RaceDefinition } from "../shared/types/character.js";
 import type { VisibleGameState } from "../shared/types/game.js";
 import type { GameEvent } from "../shared/types/network.js";
 
@@ -7,6 +8,7 @@ export class LocalStateStore {
   roomId: string | null = null;
   state: VisibleGameState | null = null;
   cardDefinitions: Record<string, CardDefinition> = {};
+  races: Record<string, RaceDefinition> = {};
   cardCatalogVersion: string | null = null;
   readonly eventLog: GameEvent[] = [];
 
@@ -22,6 +24,7 @@ export class LocalStateStore {
     if (event.type === "GAME_STATE_SYNC") {
       this.state = event.payload.state;
       this.cardDefinitions = event.payload.cardDefinitions;
+      this.races = event.payload.races;
       this.cardCatalogVersion = event.payload.cardCatalogVersion;
     }
   }

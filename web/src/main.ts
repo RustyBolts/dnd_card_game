@@ -3,7 +3,21 @@ import {
   getCardTargeting,
   getSelectableTargetIds
 } from "../../src/shared/rules/cardTargets";
+import {
+  CREATION_ABILITY_MIN,
+  CREATION_POINT_BUDGET,
+  DEFAULT_RACES,
+  calculateAbilityModifiers,
+  calculateCreationPointSpend,
+  validateAndCreateCharacter
+} from "../../src/shared/rules/characterRules";
 import type { CardDefinition, CardTargeting, VisibleCardInstance } from "../../src/shared/types/card";
+import {
+  ABILITY_KEYS,
+  type AbilityKey,
+  type AbilityScores,
+  type RaceDefinition
+} from "../../src/shared/types/character";
 import type { VisibleGameState } from "../../src/shared/types/game";
 import type { GameEvent, GameStateSyncEvent, JoinAcceptedEvent, NetworkMessage } from "../../src/shared/types/network";
 import "./styles.css";
@@ -13,6 +27,11 @@ const playerNameInput = byId<HTMLInputElement>("player-name");
 const roomIdInput = byId<HTMLInputElement>("room-id");
 const workerUrlInput = byId<HTMLInputElement>("worker-url");
 const connectionStatus = byId<HTMLElement>("connection-status");
+const raceOptionsEl = byId<HTMLElement>("race-options");
+const abilityControlsEl = byId<HTMLElement>("ability-controls");
+const abilityPointsEl = byId<HTMLElement>("ability-points");
+const characterSummaryEl = byId<HTMLElement>("character-summary");
+const catalogStatusEl = byId<HTMLElement>("catalog-status");
 const playersEl = byId<HTMLElement>("players");
 const gameStatusEl = byId<HTMLElement>("game-status");
 const turnLabel = byId<HTMLElement>("turn-label");
@@ -27,26 +46,52 @@ let socket: WebSocket | null = null;
 let playerId: string | null = null;
 let localState: VisibleGameState | null = null;
 let cardDefinitions: Record<string, CardDefinition> = {};
+let races: Record<string, RaceDefinition> = {};
+let selectedRaceId = "";
+let raceCatalogLoaded = false;
+let raceCatalogLoading = false;
+let raceCatalogStatus = "Load a Worker catalog before creating a character.";
+let abilityScores: AbilityScores = {
+  strength: 12,
+  dexterity: 12,
+  intelligence: 12,
+  wisdom: 12,
+  charisma: 12,
+  constitution: 12
+};
 
 workerUrlInput.value = import.meta.env.VITE_WORKER_WS_URL || defaultWorkerUrl();
 
 connectForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  connect();
+  void connect();
 });
 
+workerUrlInput.addEventListener("change", () => {
+  void refreshCatalogFromWorkerUrl();
+});
+workerUrlInput.addEventListener("blur", () => {
+  void refreshCatalogFromWorkerUrl();
+});
 readyButton.addEventListener("click", () => send({ type: "PLAYER_READY", requestId: requestId() }));
 drawButton.addEventListener("click", () => send({ type: "DRAW_CARD", requestId: requestId() }));
 endButton.addEventListener("click", () => send({ type: "END_TURN", requestId: requestId() }));
 
 render();
+void refreshCatalogFromWorkerUrl();
 
-function connect(): void {
+async function connect(): Promise<void> {
   socket?.close();
 
   const roomId = encodeURIComponent(roomIdInput.value.trim() || "main");
   const url = new URL(workerUrlInput.value.trim() || defaultWorkerUrl());
   url.searchParams.set("room", roomId);
+  await refreshCatalogFromWorkerUrl();
+
+  const character = readCharacterConfig();
+  if (!character) {
+    return;
+  }
 
   socket = new WebSocket(url);
   connectionStatus.textContent = "Connecting";
@@ -57,7 +102,8 @@ function connect(): void {
       type: "JOIN_ROOM",
       requestId: requestId(),
       payload: {
-        playerName: playerNameInput.value.trim() || "Player"
+        playerName: playerNameInput.value.trim() || "Player",
+        character
       }
     });
   });
@@ -82,6 +128,11 @@ function handleMessage(rawMessage: string): void {
   if (isGameStateSync(message)) {
     localState = message.payload.state;
     cardDefinitions = message.payload.cardDefinitions;
+    races = message.payload.races ?? {};
+    raceCatalogLoaded = Object.keys(races).length > 0;
+    raceCatalogStatus = raceCatalogLoaded
+      ? `Room catalog ${message.payload.cardCatalogVersion} · ${Object.keys(races).length} races.`
+      : `Room catalog ${message.payload.cardCatalogVersion} has no race data.`;
   }
 
   addLog(message);
@@ -90,6 +141,7 @@ function handleMessage(rawMessage: string): void {
 
 function render(): void {
   const isOnline = socket?.readyState === WebSocket.OPEN;
+  renderCharacterBuilder();
   readyButton.disabled = !isOnline;
   drawButton.disabled = !isOnline;
   endButton.disabled = !isOnline;
@@ -121,7 +173,9 @@ function render(): void {
             <span>${id}</span>
           </div>
           <div>Team ${escapeHtml(player.teamId)}</div>
-          <div>HP ${player.hp}</div>
+          <div>${escapeHtml(raceName(player.character.raceId))}</div>
+          <div>HP ${player.hp}/${player.maxHp}</div>
+          <div>CON ${player.character.abilityScores.constitution} (${formatModifier(player.character.abilityModifiers.constitution)})</div>
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
         </div>
@@ -134,6 +188,228 @@ function render(): void {
     hand.length > 0
       ? hand.map((card) => renderCard(card)).join("")
       : `<div class="empty-card">Hand is empty</div>`;
+}
+
+function renderCharacterBuilder(): void {
+  connectForm.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled =
+    raceCatalogLoading || !raceCatalogLoaded;
+
+  if (!raceCatalogLoaded) {
+    raceOptionsEl.innerHTML = `<p class="muted">Race catalog is not loaded.</p>`;
+    abilityControlsEl.innerHTML = `<p class="muted">Ability controls will unlock after the Worker catalog loads.</p>`;
+    abilityPointsEl.textContent = raceCatalogLoading ? "Loading" : "Locked";
+    abilityPointsEl.className = "points-warn";
+    characterSummaryEl.textContent = "Load race data before joining a room.";
+    catalogStatusEl.textContent = raceCatalogStatus;
+    return;
+  }
+
+  if (!races[selectedRaceId]) {
+    selectedRaceId = Object.keys(races)[0] ?? "human";
+  }
+
+  const race = races[selectedRaceId];
+  const spent = calculateCreationPointSpend(abilityScores);
+  const remaining = CREATION_POINT_BUDGET - spent;
+  const modifiers = calculateAbilityModifiers(abilityScores);
+
+  raceOptionsEl.innerHTML = Object.values(races)
+    .map((candidate) => `
+      <label class="race-option ${candidate.raceId === selectedRaceId ? "selected" : ""}">
+        <input type="checkbox" name="race" value="${escapeHtml(candidate.raceId)}" ${candidate.raceId === selectedRaceId ? "checked" : ""} />
+        <span>
+          <strong>${escapeHtml(candidate.name)}</strong>
+          <small>HP ${candidate.baseHp} · ${candidate.naturalArmorType} ${candidate.naturalArmorValue}</small>
+        </span>
+      </label>
+    `)
+    .join("");
+
+  abilityControlsEl.innerHTML = ABILITY_KEYS.map((ability) => {
+    const value = abilityScores[ability];
+    const max = race?.creationMax[ability] ?? 15;
+    return `
+      <div class="ability-row">
+        <div>
+          <strong>${abilityLabel(ability)}</strong>
+          <span>Max ${max} · Mod ${formatModifier(modifiers[ability])}</span>
+        </div>
+        <div class="stepper">
+          <button type="button" data-ability="${ability}" data-delta="-1" ${value <= CREATION_ABILITY_MIN ? "disabled" : ""}>-</button>
+          <input data-ability-input="${ability}" type="number" min="${CREATION_ABILITY_MIN}" max="${max}" value="${value}" />
+          <button type="button" data-ability="${ability}" data-delta="1" ${value >= max || remaining <= 0 ? "disabled" : ""}>+</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  abilityPointsEl.textContent = `${remaining} points`;
+  abilityPointsEl.className = remaining === 0 ? "points-ok" : "points-warn";
+
+  const character = tryCreateCharacter();
+  characterSummaryEl.textContent = character
+    ? `${race.name} · HP ${character.maxHp} · CON ${formatModifier(character.abilityModifiers.constitution)}`
+    : "Spend all points within the selected race limits.";
+  catalogStatusEl.textContent = raceCatalogStatus;
+}
+
+raceOptionsEl.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.name !== "race") {
+    return;
+  }
+
+  selectedRaceId = target.value;
+  clampAbilityScoresToSelectedRace();
+  render();
+});
+
+abilityControlsEl.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const ability = target.dataset.ability as AbilityKey | undefined;
+  const delta = Number(target.dataset.delta);
+  if (!ability || !Number.isInteger(delta)) {
+    return;
+  }
+
+  setAbilityScore(ability, abilityScores[ability] + delta);
+});
+
+abilityControlsEl.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  const ability = target.dataset.abilityInput as AbilityKey | undefined;
+  if (!ability) {
+    return;
+  }
+
+  setAbilityScore(ability, Number(target.value));
+});
+
+function setAbilityScore(ability: AbilityKey, value: number): void {
+  const race = races[selectedRaceId];
+  const max = race?.creationMax[ability] ?? 15;
+  const nextValue = Number.isInteger(value)
+    ? Math.max(CREATION_ABILITY_MIN, Math.min(max, value))
+    : abilityScores[ability];
+
+  abilityScores = {
+    ...abilityScores,
+    [ability]: nextValue
+  };
+  render();
+}
+
+function clampAbilityScoresToSelectedRace(): void {
+  const race = races[selectedRaceId];
+  if (!race) {
+    return;
+  }
+
+  abilityScores = {
+    strength: Math.min(abilityScores.strength, race.creationMax.strength),
+    dexterity: Math.min(abilityScores.dexterity, race.creationMax.dexterity),
+    intelligence: Math.min(abilityScores.intelligence, race.creationMax.intelligence),
+    wisdom: Math.min(abilityScores.wisdom, race.creationMax.wisdom),
+    charisma: Math.min(abilityScores.charisma, race.creationMax.charisma),
+    constitution: Math.min(abilityScores.constitution, race.creationMax.constitution)
+  };
+}
+
+function readCharacterConfig() {
+  const character = tryCreateCharacter();
+  if (!character) {
+    addLog({ type: "LOCAL_NOTICE", payload: { message: "Complete character ability allocation before joining." } });
+    render();
+    return null;
+  }
+
+  return {
+    raceId: selectedRaceId,
+    abilityScores
+  };
+}
+
+function tryCreateCharacter() {
+  try {
+    return validateAndCreateCharacter({ raceId: selectedRaceId, abilityScores }, races);
+  } catch {
+    return null;
+  }
+}
+
+async function refreshCatalogFromWorkerUrl(): Promise<void> {
+  const rawUrl = workerUrlInput.value.trim() || defaultWorkerUrl();
+  let wsUrl: URL;
+
+  try {
+    wsUrl = new URL(rawUrl);
+  } catch {
+    raceCatalogLoaded = false;
+    raceCatalogLoading = false;
+    raceCatalogStatus = "Worker URL is invalid. Race catalog is locked.";
+    races = {};
+    render();
+    return;
+  }
+
+  raceCatalogLoading = true;
+  raceCatalogLoaded = false;
+  raceCatalogStatus = "Loading race catalog...";
+  render();
+
+  try {
+    const catalogUrl = new URL(wsUrl);
+    catalogUrl.protocol = catalogUrl.protocol === "wss:" ? "https:" : "http:";
+    catalogUrl.pathname = "/api/card-catalog";
+    catalogUrl.search = "";
+
+    const response = await fetch(catalogUrl);
+    if (!response.ok) {
+      raceCatalogLoaded = false;
+      raceCatalogStatus = `Race catalog unavailable at ${catalogUrl.origin}/api/card-catalog.`;
+      races = {};
+      render();
+      return;
+    }
+
+    const catalog = await response.json() as {
+      source?: string;
+      version?: string;
+      raceCount?: number;
+      races?: Record<string, RaceDefinition>;
+    };
+    if (catalog.races && Object.keys(catalog.races).length > 0) {
+      races = catalog.races;
+      raceCatalogLoaded = true;
+      clampAbilityScoresToSelectedRace();
+      const raceCount = Object.keys(catalog.races).length;
+      const defaultRaceCount = Object.keys(DEFAULT_RACES).length;
+      const syncHint = raceCount === defaultRaceCount
+        ? " If external races were updated, run card catalog sync."
+        : "";
+      raceCatalogStatus = `Loaded ${raceCount} races from ${catalog.source ?? "catalog"} ${catalog.version ?? ""}.${syncHint}`;
+    } else {
+      raceCatalogLoaded = false;
+      races = {};
+      raceCatalogStatus = "Catalog response has no races. Race catalog is locked.";
+    }
+  } catch {
+    raceCatalogLoaded = false;
+    races = {};
+    raceCatalogStatus = "Race catalog request failed. Race catalog is locked.";
+  } finally {
+    raceCatalogLoading = false;
+  }
+
+  render();
 }
 
 function renderCard(card: VisibleCardInstance): string {
@@ -291,6 +567,25 @@ function requiresEffectTarget(card: VisibleCardInstance): boolean {
 function playerLabel(id: string): string {
   const player = localState?.players[id];
   return player ? `${player.name} (${id})` : id;
+}
+
+function raceName(raceId: string): string {
+  return races[raceId]?.name ?? raceId;
+}
+
+function abilityLabel(ability: AbilityKey): string {
+  return {
+    strength: "力量",
+    dexterity: "敏捷",
+    intelligence: "智力",
+    wisdom: "感知",
+    charisma: "魅力",
+    constitution: "體質"
+  }[ability];
+}
+
+function formatModifier(value: number): string {
+  return value >= 0 ? `+${value}` : String(value);
 }
 
 function addLog(message: NetworkMessage | GameEvent): void {

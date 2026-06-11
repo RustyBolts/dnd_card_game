@@ -6,6 +6,7 @@ import type {
   CardTargetSelection,
   CardType
 } from "../types/card.js";
+import type { AbilityScores, NaturalArmorType, RaceDefinition } from "../types/character.js";
 import type {
   CardCatalog,
   CardTransformRevertTiming,
@@ -13,11 +14,17 @@ import type {
   CardTransformScope
 } from "../types/cardCatalog.js";
 import { defaultTargetingForEffect } from "../rules/cardTargets.js";
+import { ABILITY_KEYS } from "../types/character.js";
+import {
+  CREATION_ABILITY_MIN,
+  DEFAULT_RACES
+} from "../rules/characterRules.js";
 
 export type CardCatalogCsvInput = {
   cardsCsv: string;
   starterDeckCsv: string;
   transformRulesCsv?: string;
+  racesCsv?: string;
   version: string;
 };
 
@@ -32,6 +39,7 @@ const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
 const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
 const TRANSFORM_SCOPES = new Set(["OWNER_HAND"]);
 const TRANSFORM_REVERT_TIMINGS = new Set(["NEVER", "TURN_END"]);
+const NATURAL_ARMOR_TYPES = new Set(["NONE", "FUR", "SHELL", "SKIN"]);
 
 export function normalizePublishedCsvUrl(url: string): string {
   const parsedUrl = new URL(url);
@@ -61,6 +69,7 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
   const transformRules = input.transformRulesCsv
     ? parseTransformRulesCsv(input.transformRulesCsv, cardDefinitions)
     : [];
+  const races = input.racesCsv ? parseRacesCsv(input.racesCsv) : DEFAULT_RACES;
 
   if (starterDeckCardIds.length === 0) {
     throw new Error("starter_deck.csv must contain at least one enabled card.");
@@ -70,7 +79,8 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
     version: input.version,
     cardDefinitions,
     starterDeckCardIds,
-    transformRules
+    transformRules,
+    races
   };
 }
 
@@ -80,6 +90,7 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
   const definitionsRecord = readRecord(catalog.cardDefinitions, `${source}.cardDefinitions`);
   const starterDeckValue = catalog.starterDeckCardIds;
   const transformRulesValue = catalog.transformRules ?? [];
+  const racesValue = catalog.races;
 
   if (!Array.isArray(starterDeckValue)) {
     throw new Error(`${source}.starterDeckCardIds must be an array.`);
@@ -115,12 +126,16 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     cardDefinitions,
     `${source}.transformRules`
   );
+  const races = racesValue === undefined
+    ? DEFAULT_RACES
+    : parseRacesJson(racesValue, `${source}.races`);
 
   return {
     version,
     cardDefinitions,
     starterDeckCardIds,
-    transformRules
+    transformRules,
+    races
   };
 }
 
@@ -270,6 +285,100 @@ function parseTransformRulesJson(
     seenRuleIds.add(rule.ruleId);
     return rule;
   });
+}
+
+function parseRacesCsv(csvText: string): Record<string, RaceDefinition> {
+  const records = parseCsvRecords(
+    csvText,
+    [
+      "raceId",
+      "name",
+      "baseHp",
+      "naturalArmorType",
+      "naturalArmorValue",
+      "strengthCreationMax",
+      "dexterityCreationMax",
+      "intelligenceCreationMax",
+      "wisdomCreationMax",
+      "charismaCreationMax",
+      "constitutionCreationMax",
+      "strengthLevelMax",
+      "dexterityLevelMax",
+      "intelligenceLevelMax",
+      "wisdomLevelMax",
+      "charismaLevelMax",
+      "constitutionLevelMax",
+      "enabled"
+    ],
+    "races.csv"
+  );
+  const races: Record<string, RaceDefinition> = {};
+
+  for (const record of records) {
+    if (!isEnabled(record.values.enabled)) {
+      continue;
+    }
+
+    const source = `races.csv row ${record.rowNumber}`;
+    const race = validateRaceDefinition(
+      {
+        raceId: readRequiredString(record.values.raceId, "raceId", source),
+        name: readRequiredString(record.values.name, "name", source),
+        creationMax: parseAbilityScoresFromRecord(record.values, "CreationMax", source),
+        levelMax: parseAbilityScoresFromRecord(record.values, "LevelMax", source),
+        baseHp: parseInteger(record.values.baseHp, "baseHp", source, 1),
+        naturalArmorType: parseNaturalArmorType(record.values.naturalArmorType, "naturalArmorType", source),
+        naturalArmorValue: parseInteger(record.values.naturalArmorValue, "naturalArmorValue", source, 0)
+      },
+      source
+    );
+
+    if (races[race.raceId]) {
+      throw new Error(`${source} duplicates raceId "${race.raceId}".`);
+    }
+
+    races[race.raceId] = race;
+  }
+
+  if (Object.keys(races).length === 0) {
+    throw new Error("races.csv must contain at least one enabled race.");
+  }
+
+  return races;
+}
+
+function parseRacesJson(value: unknown, source: string): Record<string, RaceDefinition> {
+  const record = readRecord(value, source);
+  const races: Record<string, RaceDefinition> = {};
+
+  for (const [raceId, rawRace] of Object.entries(record)) {
+    const raceSource = `${source}.${raceId}`;
+    const raceRecord = readRecord(rawRace, raceSource);
+    const race = validateRaceDefinition(
+      {
+        raceId: readRequiredString(raceRecord.raceId, "raceId", raceSource),
+        name: readRequiredString(raceRecord.name, "name", raceSource),
+        creationMax: parseAbilityScoresJson(raceRecord.creationMax, `${raceSource}.creationMax`),
+        levelMax: parseAbilityScoresJson(raceRecord.levelMax, `${raceSource}.levelMax`),
+        baseHp: parseInteger(raceRecord.baseHp, "baseHp", raceSource, 1),
+        naturalArmorType: parseNaturalArmorType(raceRecord.naturalArmorType, "naturalArmorType", raceSource),
+        naturalArmorValue: parseInteger(raceRecord.naturalArmorValue, "naturalArmorValue", raceSource, 0)
+      },
+      raceSource
+    );
+
+    if (race.raceId !== raceId) {
+      throw new Error(`${raceSource}.raceId must match its catalog key.`);
+    }
+
+    races[raceId] = race;
+  }
+
+  if (Object.keys(races).length === 0) {
+    throw new Error(`${source} must contain at least one race.`);
+  }
+
+  return races;
 }
 
 function parseCardDefinitionRecord(
@@ -485,6 +594,53 @@ function parseTransformRevertTiming(
   }
 
   return normalizedTiming as CardTransformRevertTiming;
+}
+
+function parseNaturalArmorType(value: unknown, field: string, source: string): NaturalArmorType {
+  const armorType = readRequiredString(value, field, source).toUpperCase();
+
+  if (!NATURAL_ARMOR_TYPES.has(armorType)) {
+    throw new Error(`${source} ${field} must be NONE, FUR, SHELL, or SKIN.`);
+  }
+
+  return armorType as NaturalArmorType;
+}
+
+function parseAbilityScoresFromRecord(
+  record: Record<string, unknown>,
+  suffix: "CreationMax" | "LevelMax",
+  source: string
+): AbilityScores {
+  return {
+    strength: parseInteger(record[`strength${suffix}`], `strength${suffix}`, source, CREATION_ABILITY_MIN),
+    dexterity: parseInteger(record[`dexterity${suffix}`], `dexterity${suffix}`, source, CREATION_ABILITY_MIN),
+    intelligence: parseInteger(record[`intelligence${suffix}`], `intelligence${suffix}`, source, CREATION_ABILITY_MIN),
+    wisdom: parseInteger(record[`wisdom${suffix}`], `wisdom${suffix}`, source, CREATION_ABILITY_MIN),
+    charisma: parseInteger(record[`charisma${suffix}`], `charisma${suffix}`, source, CREATION_ABILITY_MIN),
+    constitution: parseInteger(record[`constitution${suffix}`], `constitution${suffix}`, source, CREATION_ABILITY_MIN)
+  };
+}
+
+function parseAbilityScoresJson(value: unknown, source: string): AbilityScores {
+  const record = readRecord(value, source);
+  return {
+    strength: parseInteger(record.strength, "strength", source, CREATION_ABILITY_MIN),
+    dexterity: parseInteger(record.dexterity, "dexterity", source, CREATION_ABILITY_MIN),
+    intelligence: parseInteger(record.intelligence, "intelligence", source, CREATION_ABILITY_MIN),
+    wisdom: parseInteger(record.wisdom, "wisdom", source, CREATION_ABILITY_MIN),
+    charisma: parseInteger(record.charisma, "charisma", source, CREATION_ABILITY_MIN),
+    constitution: parseInteger(record.constitution, "constitution", source, CREATION_ABILITY_MIN)
+  };
+}
+
+function validateRaceDefinition(race: RaceDefinition, source: string): RaceDefinition {
+  for (const ability of ABILITY_KEYS) {
+    if (race.levelMax[ability] < race.creationMax[ability]) {
+      throw new Error(`${source} ${ability}LevelMax must be >= ${ability}CreationMax.`);
+    }
+  }
+
+  return race;
 }
 
 function parseTargetSelection(

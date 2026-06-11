@@ -1,4 +1,5 @@
 import type { GameCommand } from "../shared/types/network.js";
+import { ABILITY_KEYS, type AbilityScores } from "../shared/types/character.js";
 import { CommandError } from "./CommandError.js";
 
 export class CommandValidator {
@@ -14,11 +15,16 @@ export class CommandValidator {
       case "JOIN_ROOM": {
         const payload = readPayload(message);
         const playerName = readString(payload, "playerName");
+        const character = readRecord(payload.character, "character");
         return {
           type: "JOIN_ROOM",
           requestId,
           payload: {
-            playerName
+            playerName,
+            character: {
+              raceId: readString(character, "raceId"),
+              abilityScores: readAbilityScores(readRecord(character.abilityScores, "abilityScores"))
+            }
           }
         };
       }
@@ -85,6 +91,29 @@ function readString(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   if (typeof value !== "string" || value.trim() === "") {
     throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} must be a non-empty string.`);
+  }
+
+  return value;
+}
+
+function readAbilityScores(payload: Record<string, unknown>): AbilityScores {
+  const scores = {} as AbilityScores;
+
+  for (const ability of ABILITY_KEYS) {
+    const value = payload[ability];
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+      throw new CommandError("INVALID_PAYLOAD", `Payload field ${ability} must be an integer.`);
+    }
+
+    scores[ability] = value;
+  }
+
+  return scores;
+}
+
+function readRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new CommandError("INVALID_PAYLOAD", `Payload field ${label} must be an object.`);
   }
 
   return value;

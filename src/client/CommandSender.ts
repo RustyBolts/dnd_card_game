@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { createDefaultCharacterConfig } from "../shared/rules/characterRules.js";
 import type { GameCommand } from "../shared/types/network.js";
 
 export class CommandSender {
@@ -9,7 +10,8 @@ export class CommandSender {
       type: "JOIN_ROOM",
       requestId: createRequestId(),
       payload: {
-        playerName
+        playerName,
+        character: createDefaultCharacterConfig()
       }
     });
   }

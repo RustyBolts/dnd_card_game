@@ -23,6 +23,7 @@ Google Spreadsheet
 - `data/cards.csv`
 - `data/starter_deck.csv`
 - `data/transform_rules.csv`（可選）
+- `data/races.csv`（可選）
 
 `data/` 已加入 `.gitignore`，不納入 git，也不是 Cloudflare runtime 的必要資料來源。Cloudflare Worker 實際讀取的是 `wrangler.toml` / Worker variables 中設定的 Google Spreadsheet CSV URL。
 
@@ -31,6 +32,7 @@ Google Spreadsheet 建議建立三個工作表：
 - `cards`
 - `starter_deck`
 - `transform_rules`（可選）
+- `races`（可選）
 
 ### `cards` 欄位
 
@@ -107,6 +109,32 @@ wolf_form,狼形態,1,ATTACK,對一名目標造成 1 點傷害。,DAMAGE,1,,SING
 bear_form,熊形態,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,true
 ```
 
+### `races` 欄位
+
+```txt
+raceId,name,baseHp,naturalArmorType,naturalArmorValue,strengthCreationMax,dexterityCreationMax,intelligenceCreationMax,wisdomCreationMax,charismaCreationMax,constitutionCreationMax,strengthLevelMax,dexterityLevelMax,intelligenceLevelMax,wisdomLevelMax,charismaLevelMax,constitutionLevelMax,enabled
+```
+
+- `raceId`：穩定唯一 ID，角色設定和遊戲狀態都用這個 ID。
+- `name`：顯示名稱。
+- `baseHp`：種族基礎 HP，角色 HP 會以 `baseHp + 體質調整值` 計算。
+- `naturalArmorType`：`NONE`、`FUR`、`SHELL` 或 `SKIN`。
+- `naturalArmorValue`：天生護甲值，整數，必須 >= 0。
+- `*CreationMax`：創建角色時該屬性的上限。Host 只在進入房間前的角色設定使用這組限制。
+- `*LevelMax`：升級分配時該屬性的暫定上限，目前先進入 catalog 和 state，後續升級流程會使用。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+玩家建立角色時六屬性最低值固定為 8，必須剛好分配 24 點，也就是六屬性總和必須是 72。屬性調整值公式是 `Math.floor((屬性值 - 10) / 2)`，Host 會在角色設定通過後暫存在 player state。
+
+若沒有提供外部 `races.csv`，程式會使用內建預設：
+
+```txt
+raceId,name,baseHp,naturalArmorType,naturalArmorValue,strengthCreationMax,dexterityCreationMax,intelligenceCreationMax,wisdomCreationMax,charismaCreationMax,constitutionCreationMax,strengthLevelMax,dexterityLevelMax,intelligenceLevelMax,wisdomLevelMax,charismaLevelMax,constitutionLevelMax,enabled
+human,人類,20,NONE,0,18,18,18,18,18,18,20,20,20,20,20,20,true
+gnome,地侏,20,SKIN,0,15,18,20,20,18,15,20,20,20,20,20,20,true
+orc,獸人,25,FUR,0,20,18,15,15,15,20,20,20,20,20,20,20,true
+```
+
 ## 本機 Node Host
 
 `npm run dev:host` 預設讀取 seed CSV：
@@ -118,10 +146,11 @@ npm run dev:host -- --port 7777
 測試其他 CSV 匯出檔時可以指定路徑：
 
 ```bash
-npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --transform-rules-csv /path/to/transform_rules.csv
+npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --transform-rules-csv /path/to/transform_rules.csv --races-csv /path/to/races.csv
 ```
 
 如果 `cards.csv` 與 `starter_deck.csv` 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個，或只有 `transform_rules.csv`，啟動會失敗，因為 card catalog 不完整。`transform_rules.csv` 可省略；省略時代表沒有外部轉換規則。
+`races.csv` 可省略；省略時代表使用內建種族。
 
 ## Cloudflare Worker 設定
 
@@ -137,10 +166,11 @@ CARD_CATALOG_KV
 CARD_CARDS_CSV_URL=<published cards CSV URL>
 CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
 CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
+CARD_RACES_CSV_URL=<published races CSV URL>
 CARD_CATALOG_KEY=card-catalog:active
 ```
 
-`CARD_TRANSFORM_RULES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
+`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_RACES_CSV_URL` 時使用內建種族，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
 
 如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 

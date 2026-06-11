@@ -1,5 +1,6 @@
 import type { CardDefinition } from "../types/card.js";
 import type { CardCatalog } from "../types/cardCatalog.js";
+import { DEFAULT_RACES } from "./characterRules.js";
 
 export const CARD_DEFINITIONS: Record<string, CardDefinition> = {
   fireball: {
@@ -68,5 +69,6 @@ export const DEFAULT_CARD_CATALOG: CardCatalog = {
   version: "local-default-2026-06-05",
   cardDefinitions: CARD_DEFINITIONS,
   starterDeckCardIds: STARTER_DECK_CARD_IDS,
-  transformRules: []
+  transformRules: [],
+  races: DEFAULT_RACES
 };

@@ -1,4 +1,5 @@
 import type { CardDefinition } from "./card.js";
+import type { RaceDefinition } from "./character.js";
 
 export type CardTransformScope = "OWNER_HAND";
 
@@ -19,4 +20,5 @@ export type CardCatalog = {
   cardDefinitions: Record<string, CardDefinition>;
   starterDeckCardIds: string[];
   transformRules: CardTransformRule[];
+  races?: Record<string, RaceDefinition>;
 };

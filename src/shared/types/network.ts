@@ -1,4 +1,5 @@
 import type { CardDefinition } from "./card.js";
+import type { CharacterConfig, RaceDefinition } from "./character.js";
 import type { PlayerState, VisibleGameState } from "./game.js";
 
 export type NetworkMessage = {
@@ -19,6 +20,7 @@ export type JoinRoomCommand = {
   requestId: string;
   payload: {
     playerName: string;
+    character: CharacterConfig;
   };
 };
 
@@ -199,6 +201,7 @@ export type GameStateSyncEvent = {
   payload: {
     state: VisibleGameState;
     cardDefinitions: Record<string, CardDefinition>;
+    races: Record<string, RaceDefinition>;
     cardCatalogVersion: string;
   };
 };

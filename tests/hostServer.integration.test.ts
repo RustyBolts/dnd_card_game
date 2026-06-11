@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { HostServer } from "../src/host/HostServer.js";
+import { createDefaultCharacterConfig } from "../src/shared/rules/characterRules.js";
 import type { NetworkMessage } from "../src/shared/types/network.js";
 
 const openSockets: WebSocket[] = [];
@@ -29,8 +30,8 @@ describe("HostServer websocket flow", () => {
     alice.on("message", (message) => aliceMessages.push(parseMessage(message)));
     bob.on("message", (message) => bobMessages.push(parseMessage(message)));
 
-    alice.send(JSON.stringify({ type: "JOIN_ROOM", requestId: "join_a", payload: { playerName: "Alice" } }));
-    bob.send(JSON.stringify({ type: "JOIN_ROOM", requestId: "join_b", payload: { playerName: "Bob" } }));
+    alice.send(JSON.stringify(createJoinCommand("join_a", "Alice")));
+    bob.send(JSON.stringify(createJoinCommand("join_b", "Bob")));
 
     await waitFor(() => aliceMessages.some((message) => message.type === "JOIN_ACCEPTED"));
     await waitFor(() => bobMessages.some((message) => message.type === "JOIN_ACCEPTED"));
@@ -53,6 +54,17 @@ describe("HostServer websocket flow", () => {
     expect(bobMessages.some((message) => message.type === "GAME_STARTED")).toBe(true);
   });
 });
+
+function createJoinCommand(requestId: string, playerName: string): unknown {
+  return {
+    type: "JOIN_ROOM",
+    requestId,
+    payload: {
+      playerName,
+      character: createDefaultCharacterConfig()
+    }
+  };
+}
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {

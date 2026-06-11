@@ -1,4 +1,5 @@
 import type { CardInstance, VisibleCardInstance } from "./card.js";
+import type { CharacterState } from "./character.js";
 
 export type GameStatus = "WAITING" | "PLAYING" | "ENDED";
 
@@ -6,7 +7,9 @@ export type PlayerState = {
   playerId: string;
   name: string;
   teamId: string;
+  character: CharacterState;
   hp: number;
+  maxHp: number;
   energy: number;
   maxEnergy: number;
   connected: boolean;

@@ -1,4 +1,5 @@
 import { DEFAULT_CARD_CATALOG } from "../shared/rules/cardDefinitions.js";
+import { DEFAULT_RACES, validateAndCreateCharacter } from "../shared/rules/characterRules.js";
 import { resolveCardEffect } from "../shared/rules/cardEffects.js";
 import {
   getAutomaticTargetIds,
@@ -7,6 +8,7 @@ import {
 } from "../shared/rules/cardTargets.js";
 import type { CardDefinition, CardInstance } from "../shared/types/card.js";
 import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
+import type { CharacterConfig, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
@@ -19,7 +21,6 @@ import { CommandError } from "./CommandError.js";
 import { DeckManager } from "./DeckManager.js";
 import { SnapshotService } from "./SnapshotService.js";
 
-const INITIAL_HP = 20;
 const INITIAL_HAND_SIZE = 3;
 const MAX_ENERGY_CAP = 10;
 
@@ -36,6 +37,7 @@ type PendingCardRevert = {
 export class GameStateStore {
   readonly cardDefinitions: Record<string, CardDefinition>;
   readonly cardCatalogVersion: string;
+  readonly races: Record<string, RaceDefinition>;
 
   private readonly transformRules: CardTransformRule[];
   private readonly deckManager: DeckManager;
@@ -50,6 +52,7 @@ export class GameStateStore {
   ) {
     this.cardDefinitions = cardCatalog.cardDefinitions;
     this.cardCatalogVersion = cardCatalog.version;
+    this.races = cardCatalog.races ?? DEFAULT_RACES;
     this.transformRules = cardCatalog.transformRules ?? [];
     this.deckManager = new DeckManager(cardCatalog.starterDeckCardIds);
     this.snapshotService = new SnapshotService(this.cardDefinitions);
@@ -76,7 +79,7 @@ export class GameStateStore {
     return this.state;
   }
 
-  addPlayer(playerName: string): {
+  addPlayer(playerName: string, characterConfig: CharacterConfig): {
     player: PlayerState;
     privateEvents: JoinAcceptedEvent[];
     broadcastEvents: GameEvent[];
@@ -86,11 +89,14 @@ export class GameStateStore {
     }
 
     const playerId = `p${this.nextPlayerNumber++}`;
+    const character = this.createCharacter(characterConfig);
     const player: PlayerState = {
       playerId,
       name: playerName.trim() || playerId,
       teamId: getDefaultTeamId(this.state.playerOrder.length),
-      hp: INITIAL_HP,
+      character,
+      hp: character.maxHp,
+      maxHp: character.maxHp,
       energy: 0,
       maxEnergy: 0,
       connected: true,
@@ -271,6 +277,7 @@ export class GameStateStore {
       payload: {
         state: this.snapshotService.createVisibleState(this.state, playerId),
         cardDefinitions: this.cardDefinitions,
+        races: this.races,
         cardCatalogVersion: this.cardCatalogVersion
       }
     };
@@ -296,7 +303,10 @@ export class GameStateStore {
 
     for (const playerId of this.state.playerOrder) {
       const player = this.state.players[playerId];
-      player.hp = INITIAL_HP;
+      const character = this.createCharacter(player.character);
+      player.character = character;
+      player.maxHp = character.maxHp;
+      player.hp = character.maxHp;
       player.energy = 0;
       player.maxEnergy = 0;
       this.state.zones.deck[playerId] = this.deckManager.shuffle(
@@ -482,6 +492,17 @@ export class GameStateStore {
       this.state.playerOrder.length >= 2 &&
       this.state.playerOrder.every((playerId) => this.state.players[playerId].ready)
     );
+  }
+
+  private createCharacter(config: CharacterConfig) {
+    try {
+      return validateAndCreateCharacter(config, this.races);
+    } catch (error) {
+      throw new CommandError(
+        "INVALID_CHARACTER",
+        error instanceof Error ? error.message : "Character configuration is invalid."
+      );
+    }
   }
 
   private findCardInHand(playerId: string, cardInstanceId: string): { card: CardInstance; index: number } {

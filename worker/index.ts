@@ -17,6 +17,7 @@ export type Env = {
   CARD_CARDS_CSV_URL?: string;
   CARD_STARTER_DECK_CSV_URL?: string;
   CARD_TRANSFORM_RULES_CSV_URL?: string;
+  CARD_RACES_CSV_URL?: string;
   CARD_CATALOG_ADMIN_TOKEN?: string;
 };
 
@@ -50,7 +51,8 @@ export default {
           version: catalog.version,
           cardCount: Object.keys(catalog.cardDefinitions).length,
           starterDeckSize: catalog.starterDeckCardIds.length,
-          transformRuleCount: catalog.transformRules.length
+          transformRuleCount: catalog.transformRules.length,
+          raceCount: Object.keys(catalog.races ?? {}).length
         });
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "Unable to sync card catalog." }, 500);
@@ -146,7 +148,7 @@ export class GameRoom {
       type: "ROOM_INFO",
       payload: {
         roomId: store.getState().roomId,
-        message: "Send JOIN_ROOM with { playerName } to join."
+        message: "Send JOIN_ROOM with { playerName, character } to join."
       }
     });
 
@@ -265,6 +267,8 @@ function cardCatalogResponse(result: WorkerCardCatalogResult): Record<string, un
     cardCount: Object.keys(result.catalog.cardDefinitions).length,
     starterDeckSize: result.catalog.starterDeckCardIds.length,
     transformRuleCount: result.catalog.transformRules.length,
+    raceCount: Object.keys(result.catalog.races ?? {}).length,
+    races: result.catalog.races,
     cardDefinitions: result.catalog.cardDefinitions
   };
 }

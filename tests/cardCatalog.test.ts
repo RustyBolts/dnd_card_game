@@ -21,6 +21,11 @@ tactical_insight,2
 mana_spark,2
 `;
 
+const RACES_CSV = `raceId,name,baseHp,naturalArmorType,naturalArmorValue,strengthCreationMax,dexterityCreationMax,intelligenceCreationMax,wisdomCreationMax,charismaCreationMax,constitutionCreationMax,strengthLevelMax,dexterityLevelMax,intelligenceLevelMax,wisdomLevelMax,charismaLevelMax,constitutionLevelMax,enabled
+human,人類,20,NONE,0,18,18,18,18,18,18,20,20,20,20,20,20,true
+orc,獸人,25,FUR,1,20,18,15,15,15,20,20,20,20,20,20,20,true
+`;
+
 describe("card catalog data source", () => {
   it("parses CSV data into the game card catalog shape", () => {
     const catalog = parseCardCatalogFromCsv({
@@ -48,6 +53,40 @@ describe("card catalog data source", () => {
     });
     expect(catalog.starterDeckCardIds).toHaveLength(12);
     expect(catalog.starterDeckCardIds.filter((cardId) => cardId === "fireball")).toHaveLength(3);
+    expect(catalog.races?.human.baseHp).toBe(20);
+  });
+
+  it("parses external race definitions from CSV data", () => {
+    const catalog = parseCardCatalogFromCsv({
+      cardsCsv: CARDS_CSV,
+      starterDeckCsv: STARTER_DECK_CSV,
+      racesCsv: RACES_CSV,
+      version: "race-csv"
+    });
+
+    expect(catalog.races?.orc).toEqual({
+      raceId: "orc",
+      name: "獸人",
+      creationMax: {
+        strength: 20,
+        dexterity: 18,
+        intelligence: 15,
+        wisdom: 15,
+        charisma: 15,
+        constitution: 20
+      },
+      levelMax: {
+        strength: 20,
+        dexterity: 20,
+        intelligence: 20,
+        wisdom: 20,
+        charisma: 20,
+        constitution: 20
+      },
+      baseHp: 25,
+      naturalArmorType: "FUR",
+      naturalArmorValue: 1
+    });
   });
 
   it("validates a serialized catalog read back from KV", () => {
@@ -144,6 +183,55 @@ describe("card catalog data source", () => {
     );
 
     expect(catalog.transformRules).toEqual([]);
+    expect(catalog.races?.human.name).toBe("人類");
+  });
+
+  it("accepts JSON race definitions", () => {
+    const catalog = parseCardCatalogJson(
+      {
+        version: "race-json",
+        cardDefinitions: {
+          stance_shift: {
+            cardId: "stance_shift",
+            name: "Stance Shift",
+            cost: 0,
+            type: "SKILL",
+            description: "Toggle forms.",
+            effect: { type: "NONE" },
+            targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+          }
+        },
+        starterDeckCardIds: ["stance_shift"],
+        races: {
+          human: {
+            raceId: "human",
+            name: "人類",
+            creationMax: {
+              strength: 18,
+              dexterity: 18,
+              intelligence: 18,
+              wisdom: 18,
+              charisma: 18,
+              constitution: 18
+            },
+            levelMax: {
+              strength: 20,
+              dexterity: 20,
+              intelligence: 20,
+              wisdom: 20,
+              charisma: 20,
+              constitution: 20
+            },
+            baseHp: 20,
+            naturalArmorType: "NONE",
+            naturalArmorValue: 0
+          }
+        }
+      },
+      "race-json"
+    );
+
+    expect(catalog.races?.human.creationMax.strength).toBe(18);
   });
 
   it("accepts JSON transform rules", () => {

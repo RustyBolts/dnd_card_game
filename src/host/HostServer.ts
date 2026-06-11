@@ -65,7 +65,7 @@ export class HostServer {
         type: "ROOM_INFO",
         payload: {
           roomId: this.store.getState().roomId,
-          message: "Send JOIN_ROOM with { playerName } to join."
+          message: "Send JOIN_ROOM with { playerName, character } to join."
         }
       })
     );
