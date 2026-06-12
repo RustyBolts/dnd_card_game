@@ -6,13 +6,14 @@ import {
   getCardTargeting,
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
-import type { CardDefinition, CardInstance } from "../shared/types/card.js";
+import type { CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
 import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
 import type { CharacterConfig, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
   CardTransformedEvent,
+  DeckRecycledEvent,
   GameEvent,
   GameStateSyncEvent,
   JoinAcceptedEvent
@@ -22,7 +23,8 @@ import { DeckManager } from "./DeckManager.js";
 import { SnapshotService } from "./SnapshotService.js";
 
 const INITIAL_HAND_SIZE = 3;
-const MAX_ENERGY_CAP = 10;
+const BASE_MAX_ENERGY = 3;
+const BASE_TURN_DRAW_COUNT = 3;
 
 type PendingCardRevert = {
   ruleId: string;
@@ -60,12 +62,16 @@ export class GameStateStore {
       roomId,
       status: "WAITING",
       turn: 0,
+      turnPhase: "WAITING",
+      pendingDiscard: null,
       currentPlayerId: null,
       playerOrder: [],
       players: {},
       zones: {
         deck: {},
         hand: {},
+        temporary: {},
+        exhaust: {},
         board: [],
         graveyard: [],
         exile: []
@@ -98,7 +104,8 @@ export class GameStateStore {
       hp: character.maxHp,
       maxHp: character.maxHp,
       energy: 0,
-      maxEnergy: 0,
+      maxEnergy: BASE_MAX_ENERGY,
+      drawPerTurn: BASE_TURN_DRAW_COUNT,
       connected: true,
       ready: false
     };
@@ -107,6 +114,8 @@ export class GameStateStore {
     this.state.playerOrder.push(playerId);
     this.state.zones.deck[playerId] = [];
     this.state.zones.hand[playerId] = [];
+    this.state.zones.temporary[playerId] = [];
+    this.state.zones.exhaust[playerId] = [];
 
     return {
       player,
@@ -169,12 +178,14 @@ export class GameStateStore {
   drawCard(playerId: string): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
+    this.assertMainPhase();
     return this.drawCards(playerId, 1);
   }
 
   playCard(playerId: string, cardInstanceId: string, targetId?: string): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
+    this.assertMainPhase();
 
     const { card, index } = this.findCardInHand(playerId, cardInstanceId);
     const definition = this.getCardDefinition(card.cardId);
@@ -189,8 +200,7 @@ export class GameStateStore {
     player.energy -= definition.cost;
 
     this.state.zones.hand[playerId].splice(index, 1);
-    card.zone = "GRAVEYARD";
-    this.state.zones.graveyard.push(card);
+    const destinationZone = this.movePlayedCardToDestination(card, definition);
 
     const events: GameEvent[] = [
       {
@@ -200,6 +210,7 @@ export class GameStateStore {
           playerId,
           cardInstanceId,
           cardId: card.cardId,
+          destinationZone,
           targetId: resolvedTargetIds[0],
           targetIds: resolvedTargetIds
         }
@@ -218,6 +229,7 @@ export class GameStateStore {
       })
     );
     events.push(...this.applyTransformRules(playerId, card));
+    events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
 
     return events;
   }
@@ -225,49 +237,39 @@ export class GameStateStore {
   discardCard(playerId: string, cardInstanceId: string): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
+    this.assertDiscardAllowed(playerId);
 
     const { card, index } = this.findCardInHand(playerId, cardInstanceId);
     this.state.zones.hand[playerId].splice(index, 1);
-    card.zone = "GRAVEYARD";
-    this.state.zones.graveyard.push(card);
+    const revertEvents = this.revertPendingCardTransformForLeavingHand(playerId, card);
+    const destinationZone = this.moveCardToTemporary(card);
 
-    return [
+    const events: GameEvent[] = [
+      ...revertEvents,
       {
         type: "CARD_DISCARDED",
         seq: this.nextSeq(),
         payload: {
           playerId,
           cardInstanceId,
-          cardId: card.cardId
+          cardId: card.cardId,
+          destinationZone
         }
       }
     ];
+
+    if (this.state.turnPhase === "DISCARD" && this.hasCompletedPendingDiscard(playerId)) {
+      events.push(...this.completeTurn(playerId));
+    }
+
+    return events;
   }
 
   endTurn(playerId: string): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
-
-    const events: GameEvent[] = [
-      {
-        type: "TURN_ENDED",
-        seq: this.nextSeq(),
-        payload: {
-          playerId,
-          turn: this.state.turn
-        }
-      }
-    ];
-    events.push(...this.revertPendingCardTransforms(playerId, "TURN_END"));
-
-    const currentIndex = this.state.playerOrder.indexOf(playerId);
-    const nextIndex = (currentIndex + 1) % this.state.playerOrder.length;
-    const nextPlayerId = this.state.playerOrder[nextIndex];
-
-    this.state.turn += 1;
-    this.state.currentPlayerId = nextPlayerId;
-    events.push(...this.startTurn(nextPlayerId));
-    return events;
+    this.assertMainPhase();
+    return this.startDiscardOrCompleteTurn(playerId);
   }
 
   createSnapshotEvent(playerId: string): GameStateSyncEvent {
@@ -298,6 +300,8 @@ export class GameStateStore {
   private startGame(): GameEvent[] {
     this.state.status = "PLAYING";
     this.state.turn = 1;
+    this.state.turnPhase = "MAIN";
+    this.state.pendingDiscard = null;
     this.state.winnerId = null;
     this.pendingCardReverts = [];
 
@@ -308,11 +312,14 @@ export class GameStateStore {
       player.maxHp = character.maxHp;
       player.hp = character.maxHp;
       player.energy = 0;
-      player.maxEnergy = 0;
+      player.maxEnergy = BASE_MAX_ENERGY;
+      player.drawPerTurn = BASE_TURN_DRAW_COUNT;
       this.state.zones.deck[playerId] = this.deckManager.shuffle(
         this.deckManager.buildStarterDeck(playerId)
       );
       this.state.zones.hand[playerId] = [];
+      this.state.zones.temporary[playerId] = [];
+      this.state.zones.exhaust[playerId] = [];
     }
 
     const firstPlayerId = this.state.playerOrder[0];
@@ -338,8 +345,10 @@ export class GameStateStore {
 
   private startTurn(playerId: string): GameEvent[] {
     const player = this.state.players[playerId];
-    player.maxEnergy = Math.min(MAX_ENERGY_CAP, player.maxEnergy + 1);
-    player.energy = player.maxEnergy;
+    const retainedEnergy = this.resolveRetainedEnergy(player);
+    player.energy = player.maxEnergy + retainedEnergy;
+    this.state.turnPhase = "MAIN";
+    this.state.pendingDiscard = null;
 
     return [
       {
@@ -350,15 +359,19 @@ export class GameStateStore {
           turn: this.state.turn
         }
       },
-      ...this.drawCards(playerId, 1)
+      ...this.drawCards(playerId, this.resolveTurnDrawCount(player))
     ];
   }
 
-  private drawCards(playerId: string, count: number): CardDrawnEvent[] {
+  private drawCards(playerId: string, count: number): Array<CardDrawnEvent | DeckRecycledEvent> {
     this.assertKnownPlayer(playerId);
-    const events: CardDrawnEvent[] = [];
+    const events: Array<CardDrawnEvent | DeckRecycledEvent> = [];
 
     for (let drawIndex = 0; drawIndex < count; drawIndex += 1) {
+      if ((this.state.zones.deck[playerId]?.length ?? 0) === 0) {
+        events.push(...this.recycleTemporaryPileIntoDeck(playerId));
+      }
+
       const card = this.state.zones.deck[playerId]?.pop();
       if (!card) {
         break;
@@ -380,6 +393,156 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  private recycleTemporaryPileIntoDeck(playerId: string): DeckRecycledEvent[] {
+    const temporaryPile = this.state.zones.temporary[playerId] ?? [];
+    if (temporaryPile.length === 0) {
+      return [];
+    }
+
+    const recycledCards = this.deckManager.shuffle(temporaryPile.splice(0));
+    for (const card of recycledCards) {
+      card.zone = "DECK";
+    }
+    this.state.zones.deck[playerId] = [
+      ...(this.state.zones.deck[playerId] ?? []),
+      ...recycledCards
+    ];
+
+    return [
+      {
+        type: "DECK_RECYCLED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          recycledCount: recycledCards.length
+        }
+      }
+    ];
+  }
+
+  private startDiscardOrCompleteTurn(playerId: string): GameEvent[] {
+    const retainCount = this.resolveHandRetainCount(this.state.players[playerId]);
+    const handCount = this.state.zones.hand[playerId]?.length ?? 0;
+
+    if (handCount > retainCount && retainCount > 0) {
+      this.state.turnPhase = "DISCARD";
+      this.state.pendingDiscard = {
+        playerId,
+        retainCount
+      };
+
+      return [
+        {
+          type: "DISCARD_PHASE_STARTED",
+          seq: this.nextSeq(),
+          payload: {
+            playerId,
+            retainCount,
+            discardCount: handCount - retainCount
+          }
+        }
+      ];
+    }
+
+    const events = this.discardHandDownToRetainCount(playerId, retainCount);
+    events.push(...this.completeTurn(playerId));
+    return events;
+  }
+
+  private discardHandDownToRetainCount(playerId: string, retainCount: number): GameEvent[] {
+    const hand = this.state.zones.hand[playerId] ?? [];
+    const events: GameEvent[] = [];
+
+    while (hand.length > retainCount) {
+      const card = hand.shift();
+      if (!card) {
+        break;
+      }
+
+      events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
+      const destinationZone = this.moveCardToTemporary(card);
+      events.push({
+        type: "CARD_DISCARDED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          cardInstanceId: card.instanceId,
+          cardId: card.cardId,
+          destinationZone
+        }
+      });
+    }
+
+    return events;
+  }
+
+  private completeTurn(playerId: string): GameEvent[] {
+    this.state.turnPhase = "MAIN";
+    this.state.pendingDiscard = null;
+
+    const events: GameEvent[] = [
+      {
+        type: "TURN_ENDED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          turn: this.state.turn
+        }
+      }
+    ];
+    events.push(...this.revertPendingCardTransforms(playerId, "TURN_END"));
+
+    const currentIndex = this.state.playerOrder.indexOf(playerId);
+    const nextIndex = (currentIndex + 1) % this.state.playerOrder.length;
+    const nextPlayerId = this.state.playerOrder[nextIndex];
+
+    this.state.turn += 1;
+    this.state.currentPlayerId = nextPlayerId;
+    events.push(...this.startTurn(nextPlayerId));
+    return events;
+  }
+
+  private hasCompletedPendingDiscard(playerId: string): boolean {
+    const pendingDiscard = this.state.pendingDiscard;
+    if (!pendingDiscard || pendingDiscard.playerId !== playerId) {
+      return false;
+    }
+
+    return (this.state.zones.hand[playerId]?.length ?? 0) <= pendingDiscard.retainCount;
+  }
+
+  private movePlayedCardToDestination(card: CardInstance, definition: CardDefinition): CardZone {
+    return definition.consumable ? this.moveCardToExhaust(card) : this.moveCardToTemporary(card);
+  }
+
+  private moveCardToTemporary(card: CardInstance): CardZone {
+    card.zone = "TEMPORARY";
+    this.state.zones.temporary[card.ownerId] ??= [];
+    this.state.zones.temporary[card.ownerId].push(card);
+    return card.zone;
+  }
+
+  private moveCardToExhaust(card: CardInstance): CardZone {
+    card.zone = "EXHAUST";
+    this.state.zones.exhaust[card.ownerId] ??= [];
+    this.state.zones.exhaust[card.ownerId].push(card);
+    return card.zone;
+  }
+
+  private resolveRetainedEnergy(player: PlayerState): number {
+    const strengthModifier = Math.max(0, player.character.abilityModifiers.strength);
+    return Math.min(Math.max(0, player.energy), strengthModifier);
+  }
+
+  private resolveTurnDrawCount(player: PlayerState): number {
+    const dexterityBonus = Math.max(0, player.character.abilityModifiers.dexterity);
+    return Math.max(0, player.drawPerTurn + dexterityBonus);
+  }
+
+  private resolveHandRetainCount(player: PlayerState): number {
+    return Math.max(0, player.character.abilityModifiers.intelligence);
   }
 
   private applyTransformRules(playerId: string, triggerCard: CardInstance): CardTransformedEvent[] {
@@ -449,6 +612,50 @@ export class GameStateStore {
         );
       }
     }
+
+    this.pendingCardReverts = remainingReverts;
+    return events;
+  }
+
+  private revertPendingCardTransformForLeavingHand(
+    playerId: string,
+    card: CardInstance
+  ): CardTransformedEvent[] {
+    const matchedReverts: PendingCardRevert[] = [];
+    const remainingReverts: PendingCardRevert[] = [];
+
+    for (const pending of this.pendingCardReverts) {
+      if (pending.playerId === playerId && pending.cardInstanceId === card.instanceId) {
+        matchedReverts.push(pending);
+        continue;
+      }
+
+      remainingReverts.push(pending);
+    }
+
+    const events = matchedReverts.reverse().flatMap((pending) => {
+      if (card.cardId !== pending.targetCardId) {
+        return [];
+      }
+
+      return [
+        this.transformCard(
+          playerId,
+          card,
+          {
+            ruleId: pending.ruleId,
+            triggerCardId: pending.sourceCardId,
+            sourceCardId: pending.targetCardId,
+            targetCardId: pending.sourceCardId,
+            scope: "OWNER_HAND",
+            reversible: false,
+            revertTiming: "NEVER"
+          },
+          pending.sourceId,
+          pending.sourceCardId
+        )
+      ];
+    });
 
     this.pendingCardReverts = remainingReverts;
     return events;
@@ -578,6 +785,22 @@ export class GameStateStore {
   private assertCurrentPlayer(playerId: string): void {
     if (this.state.currentPlayerId !== playerId) {
       throw new CommandError("NOT_YOUR_TURN", "Only the current player can perform this command.");
+    }
+  }
+
+  private assertMainPhase(): void {
+    if (this.state.turnPhase !== "MAIN") {
+      throw new CommandError("DISCARD_REQUIRED", "Finish discarding before taking another action.");
+    }
+  }
+
+  private assertDiscardAllowed(playerId: string): void {
+    if (this.state.turnPhase !== "DISCARD") {
+      return;
+    }
+
+    if (this.state.pendingDiscard?.playerId !== playerId) {
+      throw new CommandError("DISCARD_REQUIRED", "Only the discarding player can discard cards now.");
     }
   }
 

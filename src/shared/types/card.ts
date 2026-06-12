@@ -1,6 +1,6 @@
 export type CardType = "ATTACK" | "SKILL" | "ITEM" | "STATUS";
 
-export type CardZone = "DECK" | "HAND" | "BOARD" | "GRAVEYARD" | "EXILE";
+export type CardZone = "DECK" | "HAND" | "BOARD" | "TEMPORARY" | "EXHAUST" | "GRAVEYARD" | "EXILE";
 
 export type CardEffectDefinition =
   | { type: "NONE" }
@@ -26,6 +26,7 @@ export type CardDefinition = {
   description: string;
   effect: CardEffectDefinition;
   targeting: CardTargeting;
+  consumable?: boolean;
 };
 
 export type CardInstance = {
@@ -42,5 +43,6 @@ export type VisibleCardInstance = CardInstance & {
   description?: string;
   effect?: CardEffectDefinition;
   targeting?: CardTargeting;
+  consumable?: boolean;
   hidden?: boolean;
 };

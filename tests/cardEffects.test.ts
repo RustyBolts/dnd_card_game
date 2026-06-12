@@ -5,7 +5,7 @@ import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
 import { createStartedGame, createStartedGameWithPlayers } from "./testUtils.js";
 
 describe("card effects", () => {
-  it("plays a damage card from hand, pays energy, moves the card to graveyard, and damages the target", () => {
+  it("plays a damage card from hand, pays energy, moves the card to temporary pile, and damages the target", () => {
     const store = createStartedGame();
     const state = store.getState();
     const playerId = "p1";
@@ -27,7 +27,30 @@ describe("card effects", () => {
     expect(state.players[playerId].energy).toBe(0);
     expect(state.players[targetId].hp).toBe(17);
     expect(state.zones.hand[playerId]).not.toContain(card);
-    expect(state.zones.graveyard).toContain(card);
+    expect(card.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(card);
+  });
+
+  it("moves consumable cards to the exhaust pile when played", () => {
+    const store = createStartedGame(createConsumableCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_scroll",
+      cardId: "scroll_burst",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.zones.hand[playerId].push(card);
+
+    const events = store.playCard(playerId, card.instanceId, "p2");
+
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("EXHAUST");
+    expect(card.zone).toBe("EXHAUST");
+    expect(state.zones.exhaust[playerId]).toContain(card);
+    expect(state.zones.temporary[playerId]).not.toContain(card);
   });
 
   it("rejects enemy single-target damage cards without an explicit target", () => {
@@ -225,21 +248,14 @@ describe("card effects", () => {
       ownerId: playerId,
       zone: "HAND"
     };
-    const bearForm: CardInstance = {
-      instanceId: "test_bear_form",
-      cardId: "bear_form",
-      ownerId: playerId,
-      zone: "HAND"
-    };
 
-    state.zones.hand[playerId] = [catalyst, wolfForm, bearForm];
+    state.zones.hand[playerId] = [catalyst, wolfForm];
 
     const events = store.playCard(playerId, catalyst.instanceId);
     const transformEvents = events.filter((event) => event.type === "CARD_TRANSFORMED");
 
     expect(transformEvents).toHaveLength(1);
     expect(wolfForm.cardId).toBe("bear_form");
-    expect(bearForm.cardId).toBe("bear_form");
     expect(transformEvents.map((event) => event.payload.privateCardData)).toEqual([
       { previousCardId: "wolf_form", cardId: "bear_form" }
     ]);
@@ -254,6 +270,116 @@ describe("card effects", () => {
       previousCardId: "bear_form",
       cardId: "wolf_form"
     });
+  });
+
+  it("reverts a reversible transformed card after it is played into a pile", () => {
+    const store = createStartedGame(createTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_catalyst",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.zones.hand[playerId] = [catalyst, wolfForm];
+    store.playCard(playerId, catalyst.instanceId);
+
+    expect(wolfForm.cardId).toBe("bear_form");
+
+    const events = store.playCard(playerId, wolfForm.instanceId, "p2");
+    const playedEvent = events.find((event) => event.type === "CARD_PLAYED");
+    const revertEvents = events.filter((event) => event.type === "CARD_TRANSFORMED");
+
+    expect(playedEvent?.payload.cardId).toBe("bear_form");
+    expect(state.players.p2.hp).toBe(18);
+    expect(revertEvents).toHaveLength(1);
+    expect(revertEvents[0]?.payload.privateCardData).toEqual({
+      previousCardId: "bear_form",
+      cardId: "wolf_form"
+    });
+    expect(wolfForm.cardId).toBe("wolf_form");
+    expect(wolfForm.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(wolfForm);
+    expect(store.endTurn(playerId).filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(0);
+  });
+
+  it("reverts a reversible transformed card before it is discarded into the temporary pile", () => {
+    const store = createStartedGame(createTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_catalyst",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.zones.hand[playerId] = [catalyst, wolfForm];
+    store.playCard(playerId, catalyst.instanceId);
+
+    expect(wolfForm.cardId).toBe("bear_form");
+
+    const events = store.discardCard(playerId, wolfForm.instanceId);
+    const discardedEvent = events.find((event) => event.type === "CARD_DISCARDED");
+
+    expect(events.map((event) => event.type)).toEqual(["CARD_TRANSFORMED", "CARD_DISCARDED"]);
+    expect(discardedEvent?.payload.cardId).toBe("wolf_form");
+    expect(events[0]?.type === "CARD_TRANSFORMED" ? events[0].payload.privateCardData : null).toEqual({
+      previousCardId: "bear_form",
+      cardId: "wolf_form"
+    });
+    expect(wolfForm.cardId).toBe("wolf_form");
+    expect(wolfForm.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(wolfForm);
+    expect(store.endTurn(playerId).filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(0);
+  });
+
+  it("reverts a reversible transformed card before automatic end-turn discard", () => {
+    const store = createStartedGame(createTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_catalyst",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].character.abilityModifiers.intelligence = 0;
+    state.zones.hand[playerId] = [catalyst, wolfForm];
+    store.playCard(playerId, catalyst.instanceId);
+
+    expect(wolfForm.cardId).toBe("bear_form");
+
+    const events = store.endTurn(playerId);
+    const discardedEvent = events.find((event) => event.type === "CARD_DISCARDED");
+
+    expect(events.map((event) => event.type).slice(0, 2)).toEqual(["CARD_TRANSFORMED", "CARD_DISCARDED"]);
+    expect(discardedEvent?.payload.cardId).toBe("wolf_form");
+    expect(wolfForm.cardId).toBe("wolf_form");
+    expect(wolfForm.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(wolfForm);
+    expect(events.filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(1);
   });
 });
 
@@ -275,6 +401,26 @@ function createGroupDamageCatalog(targetRequired = "false"): CardCatalog {
     starterDeckCsv: "cardId,count\nflame_wave,1\n",
     version: "external-group-test"
   });
+}
+
+function createConsumableCatalog(): CardCatalog {
+  return {
+    version: "consumable-test",
+    cardDefinitions: {
+      scroll_burst: {
+        cardId: "scroll_burst",
+        name: "Scroll Burst",
+        cost: 1,
+        type: "ITEM",
+        description: "Deal 1 damage, then exhaust.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+        consumable: true
+      }
+    },
+    starterDeckCardIds: ["scroll_burst"],
+    transformRules: []
+  };
 }
 
 function createTransformCatalog(): CardCatalog {

@@ -394,7 +394,8 @@ function parseCardDefinitionRecord(
     type: parseCardType(record.type, source),
     description: readRequiredString(record.description, "description", source),
     effect,
-    targeting: parseTargetingRecord(record, effect, source)
+    targeting: parseTargetingRecord(record, effect, source),
+    consumable: parseOptionalBoolean(record.consumable, "consumable", source)
   };
 }
 
@@ -411,7 +412,8 @@ function parseCardDefinitionJsonRecord(
     type: parseCardType(record.type, source),
     description: readRequiredString(record.description, "description", source),
     effect,
-    targeting: parseTargetingJson(record.targeting, effect, `${source}.targeting`)
+    targeting: parseTargetingJson(record.targeting, effect, `${source}.targeting`),
+    consumable: parseOptionalBoolean(record.consumable, "consumable", source)
   };
 }
 
@@ -683,6 +685,18 @@ function parseBoolean(value: unknown, field: string, source: string): boolean {
   }
 
   throw new Error(`${source} ${field} must be true or false.`);
+}
+
+function parseOptionalBoolean(value: unknown, field: string, source: string): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean" && readOptionalString(value) === "") {
+    return undefined;
+  }
+
+  return parseBoolean(value, field, source);
 }
 
 function defaultRequiresTarget(

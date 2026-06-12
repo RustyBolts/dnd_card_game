@@ -1,4 +1,5 @@
 import type { CardDefinition } from "./card.js";
+import type { CardZone } from "./card.js";
 import type { CharacterConfig, RaceDefinition } from "./character.js";
 import type { PlayerState, VisibleGameState } from "./game.js";
 
@@ -110,6 +111,15 @@ export type CardDrawnEvent = {
   };
 };
 
+export type DeckRecycledEvent = {
+  type: "DECK_RECYCLED";
+  seq: number;
+  payload: {
+    playerId: string;
+    recycledCount: number;
+  };
+};
+
 export type CardPlayedEvent = {
   type: "CARD_PLAYED";
   seq: number;
@@ -117,6 +127,7 @@ export type CardPlayedEvent = {
     playerId: string;
     cardInstanceId: string;
     cardId: string;
+    destinationZone: CardZone;
     targetId?: string;
     targetIds?: string[];
   };
@@ -129,6 +140,17 @@ export type CardDiscardedEvent = {
     playerId: string;
     cardInstanceId: string;
     cardId: string;
+    destinationZone: CardZone;
+  };
+};
+
+export type DiscardPhaseStartedEvent = {
+  type: "DISCARD_PHASE_STARTED";
+  seq: number;
+  payload: {
+    playerId: string;
+    retainCount: number;
+    discardCount: number;
   };
 };
 
@@ -222,8 +244,10 @@ export type GameEvent =
   | PlayerReadyChangedEvent
   | GameStartedEvent
   | CardDrawnEvent
+  | DeckRecycledEvent
   | CardPlayedEvent
   | CardDiscardedEvent
+  | DiscardPhaseStartedEvent
   | CardTransformedEvent
   | DamageAppliedEvent
   | HealAppliedEvent

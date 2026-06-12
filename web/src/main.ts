@@ -39,18 +39,24 @@ const currentPlayerEl = byId<HTMLElement>("current-player");
 const readyButton = byId<HTMLButtonElement>("ready-button");
 const drawButton = byId<HTMLButtonElement>("draw-button");
 const endButton = byId<HTMLButtonElement>("end-button");
+const pileControlsEl = byId<HTMLElement>("pile-controls");
+const drawPreviewEl = byId<HTMLElement>("draw-preview");
 const handEl = byId<HTMLElement>("hand");
 const eventLog = byId<HTMLOListElement>("event-log");
+const pileDialog = byId<HTMLDialogElement>("pile-dialog");
+const pileDialogTitle = byId<HTMLElement>("pile-dialog-title");
+const pileDialogBody = byId<HTMLElement>("pile-dialog-body");
+const pileDialogClose = byId<HTMLButtonElement>("pile-dialog-close");
 
 let socket: WebSocket | null = null;
 let playerId: string | null = null;
 let localState: VisibleGameState | null = null;
 let cardDefinitions: Record<string, CardDefinition> = {};
-let races: Record<string, RaceDefinition> = {};
-let selectedRaceId = "";
+let races: Record<string, RaceDefinition> = DEFAULT_RACES;
+let selectedRaceId = Object.keys(DEFAULT_RACES)[0] ?? "human";
 let raceCatalogLoaded = false;
 let raceCatalogLoading = false;
-let raceCatalogStatus = "Load a Worker catalog before creating a character.";
+let raceCatalogStatus = "Using local default races until a Worker catalog is loaded.";
 let abilityScores: AbilityScores = {
   strength: 12,
   dexterity: 12,
@@ -76,6 +82,7 @@ workerUrlInput.addEventListener("blur", () => {
 readyButton.addEventListener("click", () => send({ type: "PLAYER_READY", requestId: requestId() }));
 drawButton.addEventListener("click", () => send({ type: "DRAW_CARD", requestId: requestId() }));
 endButton.addEventListener("click", () => send({ type: "END_TURN", requestId: requestId() }));
+pileDialogClose.addEventListener("click", () => pileDialog.close());
 
 render();
 void refreshCatalogFromWorkerUrl();
@@ -142,20 +149,24 @@ function handleMessage(rawMessage: string): void {
 function render(): void {
   const isOnline = socket?.readyState === WebSocket.OPEN;
   renderCharacterBuilder();
-  readyButton.disabled = !isOnline;
-  drawButton.disabled = !isOnline;
-  endButton.disabled = !isOnline;
+  readyButton.disabled = !isOnline || localState?.status === "PLAYING";
+  drawButton.disabled = !canTakeMainAction();
+  endButton.disabled = !canTakeMainAction();
 
   if (!localState) {
     playersEl.innerHTML = `<p class="muted">No players</p>`;
     gameStatusEl.textContent = "WAITING";
     turnLabel.textContent = "Turn 0";
     currentPlayerEl.textContent = "Current: none";
+    pileControlsEl.innerHTML = "";
+    drawPreviewEl.innerHTML = "";
     handEl.innerHTML = `<div class="empty-card">Connect to a room</div>`;
     return;
   }
 
-  gameStatusEl.textContent = localState.status;
+  gameStatusEl.textContent = localState.status === "PLAYING"
+    ? `${localState.status} · ${localState.turnPhase}`
+    : localState.status;
   turnLabel.textContent = `Turn ${localState.turn}`;
   const currentPlayerName = localState.currentPlayerId
     ? localState.players[localState.currentPlayerId]?.name ?? localState.currentPlayerId
@@ -178,11 +189,14 @@ function render(): void {
           <div>CON ${player.character.abilityScores.constitution} (${formatModifier(player.character.abilityModifiers.constitution)})</div>
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
+          <div>暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
         </div>
       `;
     })
     .join("");
 
+  renderPileControls();
+  renderDrawPreview();
   const hand = playerId ? localState.zones.hand[playerId] ?? [] : [];
   handEl.innerHTML =
     hand.length > 0
@@ -190,16 +204,64 @@ function render(): void {
       : `<div class="empty-card">Hand is empty</div>`;
 }
 
+function renderPileControls(): void {
+  if (!localState || !playerId) {
+    pileControlsEl.innerHTML = "";
+    return;
+  }
+
+  const piles = [
+    {
+      key: "deck",
+      label: "牌庫",
+      count: localState.zones.deckCounts[playerId] ?? 0
+    },
+    {
+      key: "temporary",
+      label: "暫存牌堆",
+      count: localState.zones.temporaryCounts[playerId] ?? 0
+    },
+    {
+      key: "exhaust",
+      label: "消耗牌堆",
+      count: localState.zones.exhaustCounts[playerId] ?? 0
+    }
+  ];
+
+  pileControlsEl.innerHTML = piles
+    .map((pile) => `
+      <button type="button" data-pile="${pile.key}">${pile.label}(${pile.count})</button>
+    `)
+    .join("");
+}
+
+function renderDrawPreview(): void {
+  if (!localState || !playerId) {
+    drawPreviewEl.innerHTML = "";
+    return;
+  }
+
+  const preview = localState.zones.drawPreview[playerId] ?? [];
+  drawPreviewEl.innerHTML = preview.length > 0
+    ? `
+      <div class="preview-label">預知</div>
+      <div class="preview-cards">
+        ${preview.map((card) => `<span>${escapeHtml(hydrateVisibleCard(card).name ?? card.cardId)}</span>`).join("")}
+      </div>
+    `
+    : "";
+}
+
 function renderCharacterBuilder(): void {
   connectForm.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled =
-    raceCatalogLoading || !raceCatalogLoaded;
+    !tryCreateCharacter();
 
-  if (!raceCatalogLoaded) {
-    raceOptionsEl.innerHTML = `<p class="muted">Race catalog is not loaded.</p>`;
-    abilityControlsEl.innerHTML = `<p class="muted">Ability controls will unlock after the Worker catalog loads.</p>`;
-    abilityPointsEl.textContent = raceCatalogLoading ? "Loading" : "Locked";
+  if (Object.keys(races).length === 0) {
+    raceOptionsEl.innerHTML = `<p class="muted">Race catalog is not available.</p>`;
+    abilityControlsEl.innerHTML = `<p class="muted">Ability controls are unavailable until race data is available.</p>`;
+    abilityPointsEl.textContent = "Locked";
     abilityPointsEl.className = "points-warn";
-    characterSummaryEl.textContent = "Load race data before joining a room.";
+    characterSummaryEl.textContent = "Race data is required before joining a room.";
     catalogStatusEl.textContent = raceCatalogStatus;
     return;
   }
@@ -354,8 +416,7 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
   } catch {
     raceCatalogLoaded = false;
     raceCatalogLoading = false;
-    raceCatalogStatus = "Worker URL is invalid. Race catalog is locked.";
-    races = {};
+    raceCatalogStatus = "Worker URL is invalid. Using local default races.";
     render();
     return;
   }
@@ -374,8 +435,7 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
     const response = await fetch(catalogUrl);
     if (!response.ok) {
       raceCatalogLoaded = false;
-      raceCatalogStatus = `Race catalog unavailable at ${catalogUrl.origin}/api/card-catalog.`;
-      races = {};
+      raceCatalogStatus = `Race catalog unavailable at ${catalogUrl.origin}/api/card-catalog. Using local default races.`;
       render();
       return;
     }
@@ -398,13 +458,11 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
       raceCatalogStatus = `Loaded ${raceCount} races from ${catalog.source ?? "catalog"} ${catalog.version ?? ""}.${syncHint}`;
     } else {
       raceCatalogLoaded = false;
-      races = {};
-      raceCatalogStatus = "Catalog response has no races. Race catalog is locked.";
+      raceCatalogStatus = "Catalog response has no races. Using local default races.";
     }
   } catch {
     raceCatalogLoaded = false;
-    races = {};
-    raceCatalogStatus = "Race catalog request failed. Race catalog is locked.";
+    raceCatalogStatus = "Race catalog request failed. Using local default races.";
   } finally {
     raceCatalogLoading = false;
   }
@@ -416,7 +474,8 @@ function renderCard(card: VisibleCardInstance): string {
   const visibleCard = hydrateVisibleCard(card);
   const targeting = getCardTargeting(visibleCard);
   const targetControl = renderTargetControl(visibleCard, targeting);
-  const isPlayDisabled = requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0;
+  const isPlayDisabled = !canTakeMainAction() || (requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0);
+  const isDiscardDisabled = !canDiscardFromHand();
 
   return `
     <article class="card">
@@ -425,11 +484,12 @@ function renderCard(card: VisibleCardInstance): string {
       <p>${escapeHtml(visibleCard.description ?? "")}</p>
       <div class="card-meta">
         <span>${targetingLabel(targeting)}</span>
+        ${visibleCard.consumable ? `<span>消耗</span>` : ""}
       </div>
       ${targetControl}
       <div class="card-actions">
         <button type="button" data-play="${visibleCard.instanceId}" ${isPlayDisabled ? "disabled" : ""}>Play</button>
-        <button type="button" data-discard="${visibleCard.instanceId}">Discard</button>
+        <button type="button" data-discard="${visibleCard.instanceId}" ${isDiscardDisabled ? "disabled" : ""}>Discard</button>
       </div>
     </article>
   `;
@@ -449,8 +509,82 @@ function hydrateVisibleCard(card: VisibleCardInstance): VisibleCardInstance {
     type: card.type ?? definition.type,
     description: card.description ?? definition.description,
     effect: card.effect ?? definition.effect,
-    targeting: card.targeting ?? definition.targeting
+    targeting: card.targeting ?? definition.targeting,
+    consumable: card.consumable ?? definition.consumable
   };
+}
+
+pileControlsEl.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const pileKey = target.dataset.pile;
+  if (!pileKey) {
+    return;
+  }
+
+  openPileDialog(pileKey);
+});
+
+function openPileDialog(pileKey: string): void {
+  if (!localState || !playerId) {
+    return;
+  }
+
+  const pile = getPileView(pileKey);
+  if (!pile) {
+    return;
+  }
+
+  pileDialogTitle.textContent = `${pile.label}(${pile.count})`;
+  pileDialogBody.innerHTML = pile.cards.length > 0
+    ? pile.cards.map((card) => renderPileCard(card)).join("")
+    : `<p class="muted">No cards</p>`;
+  pileDialog.showModal();
+}
+
+function getPileView(pileKey: string): { label: string; count: number; cards: VisibleCardInstance[] } | null {
+  if (!localState || !playerId) {
+    return null;
+  }
+
+  if (pileKey === "deck") {
+    return {
+      label: "牌庫",
+      count: localState.zones.deckCounts[playerId] ?? 0,
+      cards: localState.zones.deck[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "temporary") {
+    return {
+      label: "暫存牌堆",
+      count: localState.zones.temporaryCounts[playerId] ?? 0,
+      cards: localState.zones.temporary[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "exhaust") {
+    return {
+      label: "消耗牌堆",
+      count: localState.zones.exhaustCounts[playerId] ?? 0,
+      cards: localState.zones.exhaust[playerId] ?? []
+    };
+  }
+
+  return null;
+}
+
+function renderPileCard(card: VisibleCardInstance): string {
+  const visibleCard = hydrateVisibleCard(card);
+  return `
+    <div class="pile-card">
+      <strong>${escapeHtml(visibleCard.name ?? visibleCard.cardId)}</strong>
+      <span>${escapeHtml(visibleCard.type ?? "")} · Cost ${visibleCard.cost ?? 0}</span>
+    </div>
+  `;
 }
 
 function renderTargetControl(card: VisibleCardInstance, targeting: CardTargeting): string {
@@ -494,6 +628,24 @@ function getPotentialTargetIds(targeting: CardTargeting): string[] {
   }
 
   return getSelectableTargetIds(localState, playerId, targeting);
+}
+
+function canTakeMainAction(): boolean {
+  return Boolean(
+    socket?.readyState === WebSocket.OPEN &&
+    localState?.status === "PLAYING" &&
+    localState.currentPlayerId === playerId &&
+    localState.turnPhase === "MAIN"
+  );
+}
+
+function canDiscardFromHand(): boolean {
+  return Boolean(
+    socket?.readyState === WebSocket.OPEN &&
+    localState?.status === "PLAYING" &&
+    localState.currentPlayerId === playerId &&
+    (localState.turnPhase === "MAIN" || localState.pendingDiscard?.playerId === playerId)
+  );
 }
 
 handEl.addEventListener("click", (event) => {

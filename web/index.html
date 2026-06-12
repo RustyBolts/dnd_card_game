@@ -68,8 +68,13 @@
             <button id="end-button" type="button">End Turn</button>
           </div>
 
+          <div id="pile-controls" class="pile-controls"></div>
+
           <div>
-            <h2>Hand</h2>
+            <div class="hand-header">
+              <h2>Hand</h2>
+              <div id="draw-preview" class="draw-preview"></div>
+            </div>
             <div id="hand" class="hand"></div>
           </div>
         </section>
@@ -79,6 +84,14 @@
           <ol id="event-log"></ol>
         </aside>
       </section>
+
+      <dialog id="pile-dialog" class="pile-dialog">
+        <div class="pile-dialog-header">
+          <h2 id="pile-dialog-title">Pile</h2>
+          <button id="pile-dialog-close" type="button">Close</button>
+        </div>
+        <div id="pile-dialog-body" class="pile-list"></div>
+      </dialog>
     </main>
   </body>
 </html>

@@ -5,6 +5,7 @@ import type {
 } from "../types/card.js";
 import type {
   CardDrawnEvent,
+  DeckRecycledEvent,
   DamageAppliedEvent,
   GameEndedEvent,
   HealAppliedEvent
@@ -14,7 +15,7 @@ import type { GameState } from "../types/game.js";
 export type DrawCardsFn = (
   playerId: string,
   count: number
-) => CardDrawnEvent[];
+) => Array<CardDrawnEvent | DeckRecycledEvent>;
 
 export type EffectContext = {
   state: GameState;
@@ -31,6 +32,7 @@ export type EffectEvent =
   | DamageAppliedEvent
   | HealAppliedEvent
   | CardDrawnEvent
+  | DeckRecycledEvent
   | GameEndedEvent;
 
 export function resolveCardEffect(context: EffectContext): EffectEvent[] {

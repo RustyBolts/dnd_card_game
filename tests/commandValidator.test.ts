@@ -91,5 +91,9 @@ describe("host command validation", () => {
     expect(opponentHand.every((card) => card.hidden)).toBe(true);
     expect(opponentHand.every((card) => card.cardId === "hidden")).toBe(true);
     expect(snapshot.zones.hand.p1.some((card) => !card.hidden && card.cardId !== "hidden")).toBe(true);
+    expect(snapshot.zones.deck.p2).toEqual([]);
+    expect(snapshot.zones.deck.p1).toHaveLength(snapshot.zones.deckCounts.p1);
+    expect(snapshot.zones.drawPreview.p1).toHaveLength(1);
+    expect(snapshot.zones.drawPreview.p2).toEqual([]);
   });
 });

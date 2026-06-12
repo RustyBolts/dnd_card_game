@@ -56,6 +56,35 @@ describe("card catalog data source", () => {
     expect(catalog.races?.human.baseHp).toBe(20);
   });
 
+  it("parses optional consumable card flags from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,enabled\n" +
+        "scroll_burst,Scroll Burst,1,ITEM,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,true,true\n",
+      starterDeckCsv: "cardId,count\nscroll_burst,1\n",
+      version: "consumable-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "consumable-json",
+      cardDefinitions: {
+        scroll_burst: {
+          cardId: "scroll_burst",
+          name: "Scroll Burst",
+          cost: 1,
+          type: "ITEM",
+          description: "Deal 1 damage.",
+          effect: { type: "DAMAGE", value: 1 },
+          targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+          consumable: true
+        }
+      },
+      starterDeckCardIds: ["scroll_burst"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.scroll_burst.consumable).toBe(true);
+    expect(jsonCatalog.cardDefinitions.scroll_burst.consumable).toBe(true);
+  });
+
   it("parses external race definitions from CSV data", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv: CARDS_CSV,
