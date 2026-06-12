@@ -28,7 +28,7 @@ Read this file before making changes. Keep changes scoped, runnable, and ready f
 - Active games should lock a catalog version when the room starts or initializes. Do not hot-reload card definitions into an active match unless the protocol explicitly supports version migration.
 - Gameplay results must be represented as events, for example `CARD_PLAYED`, `DAMAGE_APPLIED`, `TURN_STARTED`, and `GAME_STATE_SYNC`.
 - Preserve private card information. Opponent hand contents and deck contents must not leak through snapshots or events.
-- The Worker Durable Object owns online game room state for Cloudflare deployment.
+- The Worker Durable Objects own online state for Cloudflare deployment: `RoomLobby` owns room registry, private-room password validation, and join tokens; `GameRoom` owns authoritative gameplay state for one room.
 - The Node host/client prototype may remain for LAN/local testing, but Cloudflare-facing code must stay compatible with Worker runtime constraints.
 
 ## Frontend Direction
@@ -76,7 +76,16 @@ Secret:
   CARD_CATALOG_ADMIN_TOKEN
 ```
 
+For local `wrangler dev`, put `CARD_CATALOG_ADMIN_TOKEN` in `.dev.vars` copied from `.dev.vars.example`; never commit `.dev.vars`.
+
 If Worker variables are managed in the Cloudflare dashboard, deploy with `npx wrangler deploy --keep-vars` so Wrangler does not delete dashboard-managed vars.
+
+Worker Durable Object bindings:
+
+```txt
+GAME_ROOMS -> GameRoom
+ROOM_LOBBY -> RoomLobby
+```
 
 Pages project:
 

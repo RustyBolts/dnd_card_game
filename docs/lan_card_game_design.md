@@ -77,7 +77,30 @@ Command 是 Client 傳給 Host 的玩家意圖。
   "type": "JOIN_ROOM",
   "requestId": "req_001",
   "payload": {
-    "playerName": "Player A"
+    "playerName": "Player A",
+    "clientSessionId": "browser-session-uuid"
+  }
+}
+```
+
+### SET_CHARACTER
+
+```json
+{
+  "type": "SET_CHARACTER",
+  "requestId": "req_002",
+  "payload": {
+    "character": {
+      "raceId": "human",
+      "abilityScores": {
+        "strength": 14,
+        "dexterity": 12,
+        "intelligence": 12,
+        "wisdom": 12,
+        "charisma": 12,
+        "constitution": 10
+      }
+    }
   }
 }
 ```
@@ -87,7 +110,16 @@ Command 是 Client 傳給 Host 的玩家意圖。
 ```json
 {
   "type": "PLAYER_READY",
-  "requestId": "req_002"
+  "requestId": "req_003"
+}
+```
+
+### CANCEL_READY
+
+```json
+{
+  "type": "CANCEL_READY",
+  "requestId": "req_004"
 }
 ```
 

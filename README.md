@@ -6,10 +6,11 @@ Wi-Fi LAN 回合制卡牌桌遊原型。專案依照附件規格建立，採用 
 
 - Host 使用 WebSocket 開房。
 - Client 用 `ws://host-ip:port` 加入。
-- 支援 `JOIN_ROOM`、`PLAYER_READY`、`DRAW_CARD`、`PLAY_CARD`、`DISCARD_CARD`、`END_TURN`。
+- 支援 `JOIN_ROOM`、`SET_CHARACTER`、`PLAYER_READY`、`CANCEL_READY`、`DRAW_CARD`、`PLAY_CARD`、`DISCARD_CARD`、`END_TURN`。
 - Host 驗證目前回合、手牌歸屬、卡牌 zone 與能量費用。
-- 玩家加入房間時需完成角色設定：單選種族，分配 24 點到力量、敏捷、智力、感知、魅力、體質，Host 會驗證下限、種族創角上限與點數總額。
+- 玩家先加入房間，再於等待室完成角色設定：單選種族，分配 24 點到力量、敏捷、智力、感知、魅力、體質，Host 會驗證下限、種族創角上限與點數總額；ready 後與對戰開始後會鎖定角色設定。
 - 種族資料可由外部 catalog 讀入，包含創角上限、升級上限、基礎 HP、天生護甲類型與護甲值。
+- Cloudflare Worker 提供 lobby API，可建立公開房、建立私有房、列出公開房，私有房不列在公開清單，需用房間代碼與密碼取得短效 join token 後才能連 WebSocket。
 - 支援無直接效果、傷害、治療、抽牌與外部規則觸發的手牌卡牌轉換。
 - 卡片定義包含施放目標規則，可區分自己、敵人單體、任意單體、隊友單體與未來群體目標。
 - 玩家加入時預設依順序分成兩個陣營，供 `ALLY`、`ENEMY` 與 `GROUP` 目標判定使用。
@@ -48,10 +49,11 @@ npm run dev:client -- --url ws://localhost:7777 --name Alice
 npm run dev:client -- --url ws://localhost:7777 --name Bob
 ```
 
-Client 指令：
+Client 連線後會自動送出預設角色設定。Client 指令：
 
 ```txt
 ready
+cancel-ready
 draw
 hand
 play <cardInstanceId> [targetPlayerId]
@@ -62,7 +64,7 @@ players
 quit
 ```
 
-兩位玩家都輸入 `ready` 後，Host 會建立牌堆、發初始手牌並開始第一回合。
+兩位玩家都完成角色設定並輸入 `ready` 後，Host 會建立牌堆、發初始手牌並開始第一回合。
 
 ## 開發指令
 
@@ -100,7 +102,7 @@ docs/card_catalog_external_data.md
 
 ## Cloudflare Worker CI/CD
 
-Cloudflare Worker 後端使用 Durable Object 保存單一房間的權威狀態與 WebSocket 連線。
+Cloudflare Worker 後端使用 Durable Object 保存房間 lobby 與各遊戲房間的權威狀態與 WebSocket 連線。`RoomLobby` 管公開房清單、私有房密碼驗證與短效 join token；`GameRoom` 管單一房間的遊戲狀態。
 
 在 Cloudflare 建立 Worker 時使用：
 
@@ -119,6 +121,13 @@ Deploy command: npx wrangler deploy
 ```bash
 npm run build:worker
 npx wrangler deploy --dry-run
+```
+
+Worker `wrangler.toml` 需要 Durable Object bindings：
+
+```txt
+GAME_ROOMS -> GameRoom
+ROOM_LOBBY -> RoomLobby
 ```
 
 若啟用外部卡片資料，Worker 需要額外設定：
@@ -141,12 +150,34 @@ Secret:
 npx wrangler deploy --keep-vars
 ```
 
+本機 `wrangler dev` 的 admin token 需放在 `.dev.vars`，這個檔案不提交到 git。可先複製範例：
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+然後把 `.dev.vars` 改成：
+
+```txt
+CARD_CATALOG_ADMIN_TOKEN=<local-dev-token>
+```
+
+修改後重啟 `npm run dev:worker -- --port 8787`，本機 sync API 才會讀到 token。
+
 同步卡表：
 
 ```bash
 curl -X POST \
   -H "Authorization: Bearer <CARD_CATALOG_ADMIN_TOKEN>" \
   https://<worker-domain>/api/admin/card-catalog/sync
+```
+
+本機 Worker dev 範例：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <local-dev-token>" \
+  http://127.0.0.1:8787/api/admin/card-catalog/sync
 ```
 
 ## Cloudflare Pages CI/CD

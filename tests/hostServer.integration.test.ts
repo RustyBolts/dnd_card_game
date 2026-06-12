@@ -36,6 +36,12 @@ describe("HostServer websocket flow", () => {
     await waitFor(() => aliceMessages.some((message) => message.type === "JOIN_ACCEPTED"));
     await waitFor(() => bobMessages.some((message) => message.type === "JOIN_ACCEPTED"));
 
+    alice.send(JSON.stringify(createSetCharacterCommand("character_a")));
+    bob.send(JSON.stringify(createSetCharacterCommand("character_b")));
+
+    await waitFor(() => aliceMessages.some((message) => message.type === "PLAYER_CHARACTER_UPDATED"));
+    await waitFor(() => bobMessages.some((message) => message.type === "PLAYER_CHARACTER_UPDATED"));
+
     alice.send(JSON.stringify({ type: "PLAYER_READY", requestId: "ready_a" }));
     bob.send(JSON.stringify({ type: "PLAYER_READY", requestId: "ready_b" }));
 
@@ -61,6 +67,16 @@ function createJoinCommand(requestId: string, playerName: string): unknown {
     requestId,
     payload: {
       playerName,
+      clientSessionId: `${requestId}_session`
+    }
+  };
+}
+
+function createSetCharacterCommand(requestId: string): unknown {
+  return {
+    type: "SET_CHARACTER",
+    requestId,
+    payload: {
       character: createDefaultCharacterConfig()
     }
   };

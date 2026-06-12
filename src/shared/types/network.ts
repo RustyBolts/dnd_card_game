@@ -21,12 +21,25 @@ export type JoinRoomCommand = {
   requestId: string;
   payload: {
     playerName: string;
+    clientSessionId: string;
+  };
+};
+
+export type SetCharacterCommand = {
+  type: "SET_CHARACTER";
+  requestId: string;
+  payload: {
     character: CharacterConfig;
   };
 };
 
 export type PlayerReadyCommand = {
   type: "PLAYER_READY";
+  requestId: string;
+};
+
+export type CancelReadyCommand = {
+  type: "CANCEL_READY";
   requestId: string;
 };
 
@@ -59,7 +72,9 @@ export type EndTurnCommand = {
 
 export type GameCommand =
   | JoinRoomCommand
+  | SetCharacterCommand
   | PlayerReadyCommand
+  | CancelReadyCommand
   | DrawCardCommand
   | PlayCardCommand
   | DiscardCardCommand
@@ -88,6 +103,14 @@ export type PlayerReadyChangedEvent = {
   payload: {
     playerId: string;
     ready: boolean;
+  };
+};
+
+export type PlayerCharacterUpdatedEvent = {
+  type: "PLAYER_CHARACTER_UPDATED";
+  seq: number;
+  payload: {
+    player: PlayerState;
   };
 };
 
@@ -242,6 +265,7 @@ export type GameEvent =
   | JoinAcceptedEvent
   | PlayerJoinedEvent
   | PlayerReadyChangedEvent
+  | PlayerCharacterUpdatedEvent
   | GameStartedEvent
   | CardDrawnEvent
   | DeckRecycledEvent

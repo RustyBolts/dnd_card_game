@@ -8,7 +8,8 @@ import { GameStateStore } from "../src/host/GameStateStore.js";
 describe("host command validation", () => {
   it("creates a character with race-based HP and cached ability modifiers", () => {
     const store = new GameStateStore("test_room");
-    const player = store.addPlayer("Gor", {
+    const player = store.addPlayer("Gor", "session_gor").player;
+    store.setPlayerCharacter(player.playerId, {
       raceId: "orc",
       abilityScores: {
         strength: 14,
@@ -18,18 +19,20 @@ describe("host command validation", () => {
         charisma: 10,
         constitution: 16
       }
-    }).player;
+    });
 
-    expect(player.character.abilityModifiers.constitution).toBe(3);
+    expect(player.character?.abilityModifiers.constitution).toBe(3);
     expect(player.maxHp).toBe(28);
     expect(player.hp).toBe(28);
-    expect(player.character.naturalArmorType).toBe("FUR");
+    expect(player.character?.naturalArmorType).toBe("FUR");
   });
 
   it("rejects characters that do not spend exactly 24 ability points", () => {
     const store = new GameStateStore("test_room");
 
-    expect(() => store.addPlayer("Alice", {
+    const player = store.addPlayer("Alice", "session_alice").player;
+
+    expect(() => store.setPlayerCharacter(player.playerId, {
       raceId: "human",
       abilityScores: {
         strength: 8,
@@ -45,7 +48,9 @@ describe("host command validation", () => {
   it("rejects character scores above the selected race creation max", () => {
     const store = new GameStateStore("test_room");
 
-    expect(() => store.addPlayer("Alice", {
+    const player = store.addPlayer("Alice", "session_alice").player;
+
+    expect(() => store.setPlayerCharacter(player.playerId, {
       raceId: "orc",
       abilityScores: {
         strength: 13,
@@ -60,8 +65,29 @@ describe("host command validation", () => {
 
   it("accepts the default human character used by local clients", () => {
     const store = new GameStateStore("test_room");
+    const player = store.addPlayer("Alice", "session_alice").player;
+    store.setPlayerCharacter(player.playerId, createDefaultCharacterConfig());
 
-    expect(store.addPlayer("Alice", createDefaultCharacterConfig()).player.character.raceId).toBe("human");
+    expect(player.character?.raceId).toBe("human");
+  });
+
+  it("reuses the existing player for the same client session", () => {
+    const store = new GameStateStore("test_room");
+    const firstJoin = store.addPlayer("Alice", "session_alice").player;
+    const secondJoin = store.addPlayer("Alice Again", "session_alice").player;
+
+    expect(secondJoin.playerId).toBe(firstJoin.playerId);
+    expect(store.getState().playerOrder).toEqual([firstJoin.playerId]);
+    expect(secondJoin.name).toBe("Alice Again");
+  });
+
+  it("allows the same client session to reconnect after the game starts", () => {
+    const store = createStartedGame();
+    const reconnected = store.addPlayer("Alice Reconnected", "session_1").player;
+
+    expect(reconnected.playerId).toBe("p1");
+    expect(store.getState().playerOrder).toEqual(["p1", "p2"]);
+    expect(reconnected.connected).toBe(true);
   });
 
   it("rejects non-current players trying to play a card", () => {

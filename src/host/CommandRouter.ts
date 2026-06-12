@@ -6,13 +6,17 @@ export class CommandRouter {
   constructor(private readonly store: GameStateStore) {}
 
   handleJoin(command: Extract<GameCommand, { type: "JOIN_ROOM" }>) {
-    return this.store.addPlayer(command.payload.playerName, command.payload.character);
+    return this.store.addPlayer(command.payload.playerName, command.payload.clientSessionId);
   }
 
   handlePlayerCommand(playerId: string, command: Exclude<GameCommand, { type: "JOIN_ROOM" }>): GameEvent[] {
     switch (command.type) {
+      case "SET_CHARACTER":
+        return this.store.setPlayerCharacter(playerId, command.payload.character);
       case "PLAYER_READY":
         return this.store.markPlayerReady(playerId);
+      case "CANCEL_READY":
+        return this.store.cancelPlayerReady(playerId);
       case "DRAW_CARD":
         return this.store.drawCard(playerId);
       case "PLAY_CARD":

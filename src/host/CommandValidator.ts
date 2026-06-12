@@ -15,12 +15,23 @@ export class CommandValidator {
       case "JOIN_ROOM": {
         const payload = readPayload(message);
         const playerName = readString(payload, "playerName");
-        const character = readRecord(payload.character, "character");
+        const clientSessionId = readString(payload, "clientSessionId");
         return {
           type: "JOIN_ROOM",
           requestId,
           payload: {
             playerName,
+            clientSessionId
+          }
+        };
+      }
+      case "SET_CHARACTER": {
+        const payload = readPayload(message);
+        const character = readRecord(payload.character, "character");
+        return {
+          type: "SET_CHARACTER",
+          requestId,
+          payload: {
             character: {
               raceId: readString(character, "raceId"),
               abilityScores: readAbilityScores(readRecord(character.abilityScores, "abilityScores"))
@@ -30,6 +41,8 @@ export class CommandValidator {
       }
       case "PLAYER_READY":
         return { type: "PLAYER_READY", requestId };
+      case "CANCEL_READY":
+        return { type: "CANCEL_READY", requestId };
       case "DRAW_CARD":
         return { type: "DRAW_CARD", requestId };
       case "PLAY_CARD": {

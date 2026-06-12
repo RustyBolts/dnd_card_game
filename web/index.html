@@ -18,26 +18,53 @@
             Player
             <input id="player-name" name="playerName" value="Player" autocomplete="off" />
           </label>
-          <label>
-            Room
-            <input id="room-id" name="roomId" value="main" autocomplete="off" />
-          </label>
           <label class="wide">
             Worker WS
             <input id="worker-url" name="workerUrl" autocomplete="off" />
           </label>
-          <button type="submit">Connect</button>
+          <button type="submit">Connect Lobby</button>
         </form>
       </section>
 
-      <section class="character-builder">
+      <section id="lobby-panel" class="lobby-panel" hidden>
+        <div class="lobby-group">
+          <h2>Public Rooms</h2>
+          <div class="lobby-controls">
+            <select id="public-room-select"></select>
+            <button id="refresh-rooms-button" type="button">Refresh</button>
+            <button id="join-public-room-button" type="button">Join</button>
+          </div>
+        </div>
+        <div class="lobby-group">
+          <h2>Join By Code</h2>
+          <div class="lobby-controls">
+            <input id="join-room-id" placeholder="room-code" autocomplete="off" />
+            <input id="join-room-password" type="password" placeholder="password" autocomplete="off" />
+            <button id="join-private-room-button" type="button">Join</button>
+          </div>
+        </div>
+        <div class="lobby-group">
+          <h2>Create Room</h2>
+          <div class="lobby-controls">
+            <input id="create-room-id" placeholder="main" autocomplete="off" />
+            <input id="create-room-password" type="password" placeholder="empty = public" autocomplete="off" />
+            <button id="create-room-button" type="button">Create</button>
+          </div>
+        </div>
+        <p id="lobby-status" class="muted"></p>
+      </section>
+
+      <section id="character-builder" class="character-builder" hidden>
         <div class="builder-header">
           <div>
             <h2>Character</h2>
             <p id="character-summary" class="muted"></p>
             <p id="catalog-status" class="muted"></p>
           </div>
-          <strong id="ability-points"></strong>
+          <div class="builder-actions">
+            <strong id="ability-points"></strong>
+            <button id="set-character-button" type="button">Set Character</button>
+          </div>
         </div>
         <div>
           <h3>Race</h3>

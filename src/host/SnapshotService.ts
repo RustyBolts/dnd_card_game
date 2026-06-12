@@ -77,7 +77,7 @@ export class SnapshotService {
   }
 
   private getDrawPreview(state: GameState, playerId: string): CardInstance[] {
-    const previewCount = Math.max(0, state.players[playerId]?.character.abilityModifiers.wisdom ?? 0);
+    const previewCount = Math.max(0, state.players[playerId]?.character?.abilityModifiers.wisdom ?? 0);
     if (previewCount === 0) {
       return [];
     }

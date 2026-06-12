@@ -8,7 +8,7 @@ import {
 } from "../shared/rules/cardTargets.js";
 import type { CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
 import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
-import type { CharacterConfig, RaceDefinition } from "../shared/types/character.js";
+import type { CharacterConfig, CharacterState, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
@@ -85,24 +85,45 @@ export class GameStateStore {
     return this.state;
   }
 
-  addPlayer(playerName: string, characterConfig: CharacterConfig): {
+  addPlayer(playerName: string, clientSessionId: string): {
     player: PlayerState;
     privateEvents: JoinAcceptedEvent[];
     broadcastEvents: GameEvent[];
   } {
+    const normalizedSessionId = clientSessionId.trim();
+    const existingPlayer = this.findPlayerBySession(normalizedSessionId);
+    if (existingPlayer) {
+      existingPlayer.connected = true;
+      existingPlayer.name = playerName.trim() || existingPlayer.playerId;
+      return {
+        player: existingPlayer,
+        privateEvents: [
+          {
+            type: "JOIN_ACCEPTED",
+            seq: this.nextSeq(),
+            payload: {
+              playerId: existingPlayer.playerId,
+              roomId: this.state.roomId
+            }
+          }
+        ],
+        broadcastEvents: []
+      };
+    }
+
     if (this.state.status !== "WAITING") {
       throw new CommandError("GAME_ALREADY_STARTED", "Game already started.");
     }
 
     const playerId = `p${this.nextPlayerNumber++}`;
-    const character = this.createCharacter(characterConfig);
     const player: PlayerState = {
       playerId,
       name: playerName.trim() || playerId,
+      clientSessionId: normalizedSessionId,
       teamId: getDefaultTeamId(this.state.playerOrder.length),
-      character,
-      hp: character.maxHp,
-      maxHp: character.maxHp,
+      character: null,
+      hp: 0,
+      maxHp: 0,
       energy: 0,
       maxEnergy: BASE_MAX_ENERGY,
       drawPerTurn: BASE_TURN_DRAW_COUNT,
@@ -141,6 +162,34 @@ export class GameStateStore {
     };
   }
 
+  setPlayerCharacter(playerId: string, characterConfig: CharacterConfig): GameEvent[] {
+    this.assertKnownPlayer(playerId);
+
+    if (this.state.status !== "WAITING") {
+      throw new CommandError("GAME_ALREADY_STARTED", "Character can only be changed before the game starts.");
+    }
+
+    const player = this.state.players[playerId];
+    if (player.ready) {
+      throw new CommandError("PLAYER_READY_LOCKED", "Cancel ready before changing character.");
+    }
+
+    const character = this.createCharacter(characterConfig);
+    player.character = character;
+    player.maxHp = character.maxHp;
+    player.hp = character.maxHp;
+
+    return [
+      {
+        type: "PLAYER_CHARACTER_UPDATED",
+        seq: this.nextSeq(),
+        payload: {
+          player
+        }
+      }
+    ];
+  }
+
   markPlayerDisconnected(playerId: string): void {
     const player = this.state.players[playerId];
     if (player) {
@@ -155,7 +204,12 @@ export class GameStateStore {
       throw new CommandError("GAME_ALREADY_STARTED", "Ready can only be changed before the game starts.");
     }
 
-    this.state.players[playerId].ready = true;
+    const player = this.state.players[playerId];
+    if (!player.character) {
+      throw new CommandError("CHARACTER_REQUIRED", "Set a valid character before readying.");
+    }
+
+    player.ready = true;
 
     const events: GameEvent[] = [
       {
@@ -173,6 +227,27 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  cancelPlayerReady(playerId: string): GameEvent[] {
+    this.assertKnownPlayer(playerId);
+
+    if (this.state.status !== "WAITING") {
+      throw new CommandError("GAME_ALREADY_STARTED", "Ready can only be changed before the game starts.");
+    }
+
+    this.state.players[playerId].ready = false;
+
+    return [
+      {
+        type: "PLAYER_READY_CHANGED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          ready: false
+        }
+      }
+    ];
   }
 
   drawCard(playerId: string): GameEvent[] {
@@ -307,7 +382,7 @@ export class GameStateStore {
 
     for (const playerId of this.state.playerOrder) {
       const player = this.state.players[playerId];
-      const character = this.createCharacter(player.character);
+      const character = this.assertPlayerCharacter(player);
       player.character = character;
       player.maxHp = character.maxHp;
       player.hp = character.maxHp;
@@ -532,17 +607,17 @@ export class GameStateStore {
   }
 
   private resolveRetainedEnergy(player: PlayerState): number {
-    const strengthModifier = Math.max(0, player.character.abilityModifiers.strength);
+    const strengthModifier = Math.max(0, this.assertPlayerCharacter(player).abilityModifiers.strength);
     return Math.min(Math.max(0, player.energy), strengthModifier);
   }
 
   private resolveTurnDrawCount(player: PlayerState): number {
-    const dexterityBonus = Math.max(0, player.character.abilityModifiers.dexterity);
+    const dexterityBonus = Math.max(0, this.assertPlayerCharacter(player).abilityModifiers.dexterity);
     return Math.max(0, player.drawPerTurn + dexterityBonus);
   }
 
   private resolveHandRetainCount(player: PlayerState): number {
-    return Math.max(0, player.character.abilityModifiers.intelligence);
+    return Math.max(0, this.assertPlayerCharacter(player).abilityModifiers.intelligence);
   }
 
   private applyTransformRules(playerId: string, triggerCard: CardInstance): CardTransformedEvent[] {
@@ -697,7 +772,10 @@ export class GameStateStore {
   private canStartGame(): boolean {
     return (
       this.state.playerOrder.length >= 2 &&
-      this.state.playerOrder.every((playerId) => this.state.players[playerId].ready)
+      this.state.playerOrder.every((playerId) => {
+        const player = this.state.players[playerId];
+        return player.ready && Boolean(player.character);
+      })
     );
   }
 
@@ -808,6 +886,25 @@ export class GameStateStore {
     if (!this.state.players[playerId]) {
       throw new CommandError("UNKNOWN_PLAYER", `Player ${playerId} does not exist.`);
     }
+  }
+
+  private assertPlayerCharacter(player: PlayerState): CharacterState {
+    if (!player.character) {
+      throw new CommandError("CHARACTER_REQUIRED", `${player.name} has not set a character.`);
+    }
+
+    return player.character;
+  }
+
+  private findPlayerBySession(clientSessionId: string): PlayerState | null {
+    const sessionId = clientSessionId.trim();
+    if (!sessionId) {
+      return null;
+    }
+
+    return this.state.playerOrder
+      .map((playerId) => this.state.players[playerId])
+      .find((player) => player.clientSessionId === sessionId) ?? null;
   }
 
   private nextSeq(): number {

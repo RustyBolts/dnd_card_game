@@ -62,6 +62,11 @@ while (true) {
       continue;
     }
 
+    if (command === "cancel-ready") {
+      client.commands.cancelReady();
+      continue;
+    }
+
     if (command === "draw") {
       client.commands.draw();
       continue;
@@ -117,7 +122,7 @@ rl.close();
 client.close();
 
 function printHelp(): void {
-  console.log("Commands: ready, draw, hand, play <cardInstanceId> [targetPlayerId], discard <cardInstanceId>, end, state, players, help, quit");
+  console.log("Commands: ready, cancel-ready, draw, hand, play <cardInstanceId> [targetPlayerId], discard <cardInstanceId>, end, state, players, help, quit");
 }
 
 function isGameStateSyncEvent(event: NetworkMessage): event is GameStateSyncEvent {
@@ -159,7 +164,8 @@ function renderPlayers(state: VisibleGameState | null): void {
   for (const playerId of state.playerOrder) {
     const player = state.players[playerId];
     const marker = state.currentPlayerId === playerId ? "*" : " ";
-    console.log(`${marker} ${playerId} ${player.name} hp=${player.hp} energy=${player.energy}/${player.maxEnergy} ready=${player.ready} hand=${state.zones.handCounts[playerId]} deck=${state.zones.deckCounts[playerId]}`);
+    const race = player.character?.raceId ?? "no-character";
+    console.log(`${marker} ${playerId} ${player.name} race=${race} hp=${player.hp} energy=${player.energy}/${player.maxEnergy} ready=${player.ready} hand=${state.zones.handCounts[playerId]} deck=${state.zones.deckCounts[playerId]}`);
   }
 }
 

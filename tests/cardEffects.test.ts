@@ -365,7 +365,7 @@ describe("card effects", () => {
       zone: "HAND"
     };
 
-    state.players[playerId].character.abilityModifiers.intelligence = 0;
+    state.players[playerId].character!.abilityModifiers.intelligence = 0;
     state.zones.hand[playerId] = [catalyst, wolfForm];
     store.playCard(playerId, catalyst.instanceId);
 

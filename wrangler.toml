@@ -16,9 +16,17 @@ CARD_RACES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTjZ6vCBGn
 name = "GAME_ROOMS"
 class_name = "GameRoom"
 
+[[durable_objects.bindings]]
+name = "ROOM_LOBBY"
+class_name = "RoomLobby"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GameRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RoomLobby"]
 
 [[kv_namespaces]]
 binding = "CARD_CATALOG_KV"

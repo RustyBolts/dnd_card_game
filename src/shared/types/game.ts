@@ -12,8 +12,9 @@ export type PendingDiscardState = {
 export type PlayerState = {
   playerId: string;
   name: string;
+  clientSessionId: string;
   teamId: string;
-  character: CharacterState;
+  character: CharacterState | null;
   hp: number;
   maxHp: number;
   energy: number;

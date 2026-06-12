@@ -11,7 +11,11 @@ export function createStartedGameWithPlayers(
   cardCatalog?: CardCatalog
 ): GameStateStore {
   const store = new GameStateStore("test_room", cardCatalog);
-  const players = playerNames.map((name) => store.addPlayer(name, createDefaultCharacterConfig()).player);
+  const players = playerNames.map((name, index) => {
+    const player = store.addPlayer(name, `session_${index + 1}`).player;
+    store.setPlayerCharacter(player.playerId, createDefaultCharacterConfig());
+    return player;
+  });
 
   for (const player of players) {
     store.markPlayerReady(player.playerId);

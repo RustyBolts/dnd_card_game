@@ -26,6 +26,7 @@ export class GameClient {
 
       socket.on("open", () => {
         this.commands.join(this.options.playerName);
+        this.commands.setCharacter();
         resolve();
       });
 

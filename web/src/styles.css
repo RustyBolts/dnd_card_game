@@ -10,6 +10,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -106,9 +110,38 @@ h3 {
 
 .connect-form {
   display: grid;
-  grid-template-columns: minmax(120px, 0.5fr) minmax(100px, 0.4fr) minmax(240px, 1.1fr) auto;
+  grid-template-columns: minmax(120px, 0.5fr) minmax(260px, 1.2fr) auto;
   gap: 12px;
   align-items: end;
+}
+
+.lobby-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 18px;
+  padding: 18px 24px;
+  border-bottom: 1px solid rgba(245, 243, 232, 0.12);
+  background: rgba(16, 17, 15, 0.6);
+}
+
+.lobby-panel h2 {
+  margin-bottom: 10px;
+}
+
+.lobby-status,
+#lobby-status {
+  grid-column: 1 / -1;
+}
+
+.lobby-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.lobby-group:nth-of-type(n + 2) .lobby-controls {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 
 .character-builder {
@@ -124,6 +157,13 @@ h3 {
   display: grid;
   align-content: start;
   gap: 12px;
+}
+
+.builder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 
 #ability-points {
@@ -485,18 +525,22 @@ h3 {
 
 @media (max-width: 980px) {
   .topbar,
+  .lobby-panel,
   .character-builder,
   .table {
     grid-template-columns: 1fr;
   }
 
-  .connect-form {
+  .connect-form,
+  .lobby-controls,
+  .lobby-group:nth-of-type(n + 2) .lobby-controls {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
   .topbar,
+  .lobby-panel,
   .character-builder,
   .table {
     padding-left: 14px;
