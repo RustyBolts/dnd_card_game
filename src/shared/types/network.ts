@@ -1,4 +1,4 @@
-import type { CardDefinition } from "./card.js";
+import type { CardActionTagType, CardActionTrigger, CardDefinition } from "./card.js";
 import type { CardZone } from "./card.js";
 import type { CharacterConfig, RaceDefinition } from "./character.js";
 import type { PlayerState, VisibleGameState } from "./game.js";
@@ -62,6 +62,7 @@ export type DiscardCardCommand = {
   requestId: string;
   payload: {
     cardInstanceId: string;
+    targetId?: string;
   };
 };
 
@@ -164,6 +165,20 @@ export type CardDiscardedEvent = {
     cardInstanceId: string;
     cardId: string;
     destinationZone: CardZone;
+  };
+};
+
+export type CardActionTriggeredEvent = {
+  type: "CARD_ACTION_TRIGGERED";
+  seq: number;
+  payload: {
+    playerId: string;
+    cardInstanceId: string;
+    cardId: string;
+    actionTag: CardActionTagType;
+    trigger: CardActionTrigger;
+    targetId?: string;
+    targetIds?: string[];
   };
 };
 
@@ -271,6 +286,7 @@ export type GameEvent =
   | DeckRecycledEvent
   | CardPlayedEvent
   | CardDiscardedEvent
+  | CardActionTriggeredEvent
   | DiscardPhaseStartedEvent
   | CardTransformedEvent
   | DamageAppliedEvent

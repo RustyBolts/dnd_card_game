@@ -83,12 +83,12 @@ while (true) {
     }
 
     if (command === "discard") {
-      const [cardInstanceId] = parts;
+      const [cardInstanceId, targetId] = parts;
       if (!cardInstanceId) {
-        console.log("Usage: discard <cardInstanceId>");
+        console.log("Usage: discard <cardInstanceId> [targetPlayerId]");
         continue;
       }
-      client.commands.discard(cardInstanceId);
+      client.commands.discard(cardInstanceId, targetId);
       continue;
     }
 
@@ -122,7 +122,7 @@ rl.close();
 client.close();
 
 function printHelp(): void {
-  console.log("Commands: ready, cancel-ready, draw, hand, play <cardInstanceId> [targetPlayerId], discard <cardInstanceId>, end, state, players, help, quit");
+  console.log("Commands: ready, cancel-ready, draw, hand, play <cardInstanceId> [targetPlayerId], discard <cardInstanceId> [targetPlayerId], end, state, players, help, quit");
 }
 
 function isGameStateSyncEvent(event: NetworkMessage): event is GameStateSyncEvent {

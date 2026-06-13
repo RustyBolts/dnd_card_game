@@ -22,7 +22,7 @@ export class CommandRouter {
       case "PLAY_CARD":
         return this.store.playCard(playerId, command.payload.cardInstanceId, command.payload.targetId);
       case "DISCARD_CARD":
-        return this.store.discardCard(playerId, command.payload.cardInstanceId);
+        return this.store.discardCard(playerId, command.payload.cardInstanceId, command.payload.targetId);
       case "END_TURN":
         return this.store.endTurn(playerId);
       default:

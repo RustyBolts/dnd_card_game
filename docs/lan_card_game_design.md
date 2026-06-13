@@ -152,10 +152,13 @@ Command 是 Client 傳給 Host 的玩家意圖。
   "type": "DISCARD_CARD",
   "requestId": "req_005",
   "payload": {
-    "cardInstanceId": "card_inst_001"
+    "cardInstanceId": "card_inst_001",
+    "targetId": "p2"
   }
 }
 ```
+
+`targetId` 是可選欄位；只有棄牌觸發卡牌微操作且該效果需要指定目標時才需要提供。
 
 ### END_TURN
 
@@ -235,12 +238,32 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 }
 ```
 
+### CARD_ACTION_TRIGGERED
+
+```json
+{
+  "type": "CARD_ACTION_TRIGGERED",
+  "seq": 5,
+  "payload": {
+    "playerId": "p1",
+    "cardInstanceId": "card_inst_001",
+    "cardId": "quick_shot",
+    "actionTag": "BONUS_ACTION",
+    "trigger": "DISCARD",
+    "targetId": "p2",
+    "targetIds": ["p2"]
+  }
+}
+```
+
+目前 `BONUS_ACTION` 會在棄牌動作發生時觸發，並以 0 能量消耗解析該卡效果。前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張整理手牌；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
+
 ### DAMAGE_APPLIED
 
 ```json
 {
   "type": "DAMAGE_APPLIED",
-  "seq": 5,
+  "seq": 6,
   "payload": {
     "sourceId": "card_inst_001",
     "targetId": "p2",
@@ -255,7 +278,7 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 ```json
 {
   "type": "TURN_STARTED",
-  "seq": 6,
+  "seq": 7,
   "payload": {
     "playerId": "p2",
     "turn": 2
@@ -268,7 +291,7 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 ```json
 {
   "type": "GAME_STATE_SYNC",
-  "seq": 7,
+  "seq": 8,
   "payload": {
     "state": {}
   }

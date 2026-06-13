@@ -60,11 +60,13 @@ export class CommandValidator {
       }
       case "DISCARD_CARD": {
         const payload = readPayload(message);
+        const targetId = typeof payload.targetId === "string" ? payload.targetId : undefined;
         return {
           type: "DISCARD_CARD",
           requestId,
           payload: {
-            cardInstanceId: readString(payload, "cardInstanceId")
+            cardInstanceId: readString(payload, "cardInstanceId"),
+            targetId
           }
         };
       }

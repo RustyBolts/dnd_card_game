@@ -6,12 +6,13 @@ import {
   getCardTargeting,
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
-import type { CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
+import type { CardActionTag, CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
 import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
 import type { CharacterConfig, CharacterState, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
   CardDrawnEvent,
+  CardActionTriggeredEvent,
   CardTransformedEvent,
   DeckRecycledEvent,
   GameEvent,
@@ -309,12 +310,18 @@ export class GameStateStore {
     return events;
   }
 
-  discardCard(playerId: string, cardInstanceId: string): GameEvent[] {
+  discardCard(playerId: string, cardInstanceId: string, targetId?: string): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
     this.assertDiscardAllowed(playerId);
 
     const { card, index } = this.findCardInHand(playerId, cardInstanceId);
+    const definition = this.getCardDefinition(card.cardId);
+    const actionTag = this.getTriggeredDiscardActionTag(definition);
+    const actionTargetIds = actionTag
+      ? this.resolveActionTargetIds(definition, playerId, targetId)
+      : [];
+
     this.state.zones.hand[playerId].splice(index, 1);
     const revertEvents = this.revertPendingCardTransformForLeavingHand(playerId, card);
     const destinationZone = this.moveCardToTemporary(card);
@@ -330,10 +337,17 @@ export class GameStateStore {
           cardId: card.cardId,
           destinationZone
         }
-      }
+      },
+      ...(actionTag
+        ? this.resolveTriggeredActionEvents(playerId, card, definition, actionTag, actionTargetIds)
+        : [])
     ];
 
-    if (this.state.turnPhase === "DISCARD" && this.hasCompletedPendingDiscard(playerId)) {
+    if (
+      this.state.status !== "ENDED" &&
+      this.state.turnPhase === "DISCARD" &&
+      this.hasCompletedPendingDiscard(playerId)
+    ) {
       events.push(...this.completeTurn(playerId));
     }
 
@@ -501,7 +515,7 @@ export class GameStateStore {
     const retainCount = this.resolveHandRetainCount(this.state.players[playerId]);
     const handCount = this.state.zones.hand[playerId]?.length ?? 0;
 
-    if (handCount > retainCount && retainCount > 0) {
+    if (handCount > retainCount) {
       this.state.turnPhase = "DISCARD";
       this.state.pendingDiscard = {
         playerId,
@@ -522,7 +536,9 @@ export class GameStateStore {
     }
 
     const events = this.discardHandDownToRetainCount(playerId, retainCount);
-    events.push(...this.completeTurn(playerId));
+    if (this.state.status !== "ENDED") {
+      events.push(...this.completeTurn(playerId));
+    }
     return events;
   }
 
@@ -536,6 +552,12 @@ export class GameStateStore {
         break;
       }
 
+      const definition = this.getCardDefinition(card.cardId);
+      const actionTag = this.getTriggeredDiscardActionTag(definition);
+      const actionTargetIds = actionTag
+        ? this.resolveAutomaticActionTargetIds(definition, playerId)
+        : null;
+
       events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
       const destinationZone = this.moveCardToTemporary(card);
       events.push({
@@ -548,6 +570,14 @@ export class GameStateStore {
           destinationZone
         }
       });
+
+      if (actionTag && actionTargetIds) {
+        events.push(...this.resolveTriggeredActionEvents(playerId, card, definition, actionTag, actionTargetIds));
+      }
+
+      if (this.state.status === "ENDED") {
+        break;
+      }
     }
 
     return events;
@@ -586,6 +616,74 @@ export class GameStateStore {
     }
 
     return (this.state.zones.hand[playerId]?.length ?? 0) <= pendingDiscard.retainCount;
+  }
+
+  private getTriggeredDiscardActionTag(definition: CardDefinition): CardActionTag | null {
+    return definition.actionTags?.find(
+      (tag) => tag.type === "BONUS_ACTION" && tag.trigger === "DISCARD"
+    ) ?? null;
+  }
+
+  private resolveAutomaticActionTargetIds(
+    definition: CardDefinition,
+    playerId: string
+  ): string[] | null {
+    const targeting = getCardTargeting(definition);
+    if (targeting.requiresTarget) {
+      return null;
+    }
+
+    const targetIds = getAutomaticTargetIds(this.state, playerId, targeting);
+    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
+      return null;
+    }
+
+    return targetIds;
+  }
+
+  private resolveActionTargetIds(
+    definition: CardDefinition,
+    playerId: string,
+    targetId?: string
+  ): string[] {
+    const resolvedTargetIds = this.resolveTargetIds(definition, playerId, targetId);
+    this.assertEffectTargetsResolved(definition, resolvedTargetIds);
+    return resolvedTargetIds;
+  }
+
+  private resolveTriggeredActionEvents(
+    playerId: string,
+    card: CardInstance,
+    definition: CardDefinition,
+    actionTag: CardActionTag,
+    targetIds: string[]
+  ): GameEvent[] {
+    const actionEvent: CardActionTriggeredEvent = {
+      type: "CARD_ACTION_TRIGGERED",
+      seq: this.nextSeq(),
+      payload: {
+        playerId,
+        cardInstanceId: card.instanceId,
+        cardId: definition.cardId,
+        actionTag: actionTag.type,
+        trigger: actionTag.trigger,
+        targetId: targetIds[0],
+        targetIds
+      }
+    };
+
+    return [
+      actionEvent,
+      ...resolveCardEffect({
+        state: this.state,
+        sourceCard: card,
+        sourceDefinition: definition,
+        playerId,
+        targetIds,
+        nextSeq: () => this.nextSeq(),
+        drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
+      })
+    ];
   }
 
   private movePlayedCardToDestination(card: CardInstance, definition: CardDefinition): CardZone {

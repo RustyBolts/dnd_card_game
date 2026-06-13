@@ -85,6 +85,43 @@ describe("card catalog data source", () => {
     expect(jsonCatalog.cardDefinitions.scroll_burst.consumable).toBe(true);
   });
 
+  it("parses action tags from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,actionTags,enabled\n" +
+        "quick_shot,Quick Shot,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,附贈動作,true\n",
+      starterDeckCsv: "cardId,count\nquick_shot,1\n",
+      version: "action-tags-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "action-tags-json",
+      cardDefinitions: {
+        quick_shot: {
+          cardId: "quick_shot",
+          name: "Quick Shot",
+          cost: 2,
+          type: "ATTACK",
+          description: "Deal 2 damage.",
+          effect: { type: "DAMAGE", value: 2 },
+          targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+          actionTags: ["BONUS_ACTION"]
+        }
+      },
+      starterDeckCardIds: ["quick_shot"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.quick_shot.actionTags).toEqual([{
+      type: "BONUS_ACTION",
+      label: "附贈動作",
+      trigger: "DISCARD"
+    }]);
+    expect(jsonCatalog.cardDefinitions.quick_shot.actionTags).toEqual([{
+      type: "BONUS_ACTION",
+      label: "附贈動作",
+      trigger: "DISCARD"
+    }]);
+  });
+
   it("parses external race definitions from CSV data", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv: CARDS_CSV,

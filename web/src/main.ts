@@ -688,7 +688,12 @@ function renderCard(card: VisibleCardInstance): string {
   const targeting = getCardTargeting(visibleCard);
   const targetControl = renderTargetControl(visibleCard, targeting);
   const isPlayDisabled = !canTakeMainAction() || (requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0);
-  const isDiscardDisabled = !canDiscardFromHand();
+  const showDiscardButton = canDiscardFromHand();
+  const triggersBonusDiscard = canTriggerBonusDiscard(visibleCard);
+  const isDiscardTargetBlocked = triggersBonusDiscard && targeting.requiresTarget && getPotentialTargetIds(targeting).length === 0;
+  const discardButton = showDiscardButton
+    ? `<button type="button" data-discard="${visibleCard.instanceId}" ${isDiscardTargetBlocked ? "disabled" : ""}>Discard</button>`
+    : "";
 
   return `
     <article class="card">
@@ -698,11 +703,12 @@ function renderCard(card: VisibleCardInstance): string {
       <div class="card-meta">
         <span>${targetingLabel(targeting)}</span>
         ${visibleCard.consumable ? `<span>消耗</span>` : ""}
+        ${renderActionTags(visibleCard)}
       </div>
       ${targetControl}
       <div class="card-actions">
         <button type="button" data-play="${visibleCard.instanceId}" ${isPlayDisabled ? "disabled" : ""}>Play</button>
-        <button type="button" data-discard="${visibleCard.instanceId}" ${isDiscardDisabled ? "disabled" : ""}>Discard</button>
+        ${discardButton}
       </div>
     </article>
   `;
@@ -723,8 +729,15 @@ function hydrateVisibleCard(card: VisibleCardInstance): VisibleCardInstance {
     description: card.description ?? definition.description,
     effect: card.effect ?? definition.effect,
     targeting: card.targeting ?? definition.targeting,
-    consumable: card.consumable ?? definition.consumable
+    consumable: card.consumable ?? definition.consumable,
+    actionTags: card.actionTags ?? definition.actionTags
   };
+}
+
+function renderActionTags(card: VisibleCardInstance): string {
+  return (card.actionTags ?? [])
+    .map((tag) => `<span>${escapeHtml(tag.label)}</span>`)
+    .join("");
 }
 
 pileControlsEl.addEventListener("click", (event) => {
@@ -857,7 +870,8 @@ function canDiscardFromHand(): boolean {
     socket?.readyState === WebSocket.OPEN &&
     localState?.status === "PLAYING" &&
     localState.currentPlayerId === playerId &&
-    (localState.turnPhase === "MAIN" || localState.pendingDiscard?.playerId === playerId)
+    localState.turnPhase === "DISCARD" &&
+    localState.pendingDiscard?.playerId === playerId
   );
 }
 
@@ -895,11 +909,23 @@ handEl.addEventListener("click", (event) => {
 
   const discardId = target.dataset.discard;
   if (discardId) {
+    const card = findVisibleHandCard(discardId);
+    const selectedTargetId = selectedTargetForCard(discardId);
+
+    if (card && canTriggerBonusDiscard(card)) {
+      const targeting = getCardTargeting(card);
+      if (targeting.requiresTarget && !selectedTargetId) {
+        addLog({ type: "LOCAL_NOTICE", payload: { message: "No valid target selected." } });
+        return;
+      }
+    }
+
     send({
       type: "DISCARD_CARD",
       requestId: requestId(),
       payload: {
-        cardInstanceId: discardId
+        cardInstanceId: discardId,
+        targetId: selectedTargetId
       }
     });
   }
@@ -931,6 +957,12 @@ function selectedTargetForCard(cardInstanceId: string): string | undefined {
 
 function requiresEffectTarget(card: VisibleCardInstance): boolean {
   return card.effect?.type === "DAMAGE" || card.effect?.type === "HEAL";
+}
+
+function canTriggerBonusDiscard(card: VisibleCardInstance): boolean {
+  return canDiscardFromHand() && Boolean(
+    card.actionTags?.some((tag) => tag.type === "BONUS_ACTION" && tag.trigger === "DISCARD")
+  );
 }
 
 function playerLabel(id: string): string {

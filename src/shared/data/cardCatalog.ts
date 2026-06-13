@@ -1,4 +1,6 @@
 import type {
+  CardActionTag,
+  CardActionTagType,
   CardDefinition,
   CardEffectDefinition,
   CardTargeting,
@@ -35,6 +37,7 @@ type CsvRecord = {
 
 const CARD_TYPES = new Set(["ATTACK", "SKILL", "ITEM", "STATUS"]);
 const EFFECT_TYPES = new Set(["NONE", "DAMAGE", "HEAL", "DRAW"]);
+const ACTION_TAG_TYPES = new Set(["BONUS_ACTION"]);
 const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
 const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
 const TRANSFORM_SCOPES = new Set(["OWNER_HAND"]);
@@ -386,6 +389,7 @@ function parseCardDefinitionRecord(
   source: string
 ): CardDefinition {
   const effect = parseEffect(record, source);
+  const actionTags = parseActionTagsRecord(record, source);
 
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
@@ -395,7 +399,8 @@ function parseCardDefinitionRecord(
     description: readRequiredString(record.description, "description", source),
     effect,
     targeting: parseTargetingRecord(record, effect, source),
-    consumable: parseOptionalBoolean(record.consumable, "consumable", source)
+    consumable: parseOptionalBoolean(record.consumable, "consumable", source),
+    ...(actionTags.length > 0 ? { actionTags } : {})
   };
 }
 
@@ -404,6 +409,7 @@ function parseCardDefinitionJsonRecord(
   source: string
 ): CardDefinition {
   const effect = parseEffectJson(record.effect, `${source}.effect`);
+  const actionTags = parseActionTagsJson(record.actionTags, `${source}.actionTags`);
 
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
@@ -413,7 +419,8 @@ function parseCardDefinitionJsonRecord(
     description: readRequiredString(record.description, "description", source),
     effect,
     targeting: parseTargetingJson(record.targeting, effect, `${source}.targeting`),
-    consumable: parseOptionalBoolean(record.consumable, "consumable", source)
+    consumable: parseOptionalBoolean(record.consumable, "consumable", source),
+    ...(actionTags.length > 0 ? { actionTags } : {})
   };
 }
 
@@ -457,6 +464,73 @@ function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
     type: effectType,
     value: parseInteger(record.value, "value", source, 0)
   };
+}
+
+function parseActionTagsRecord(record: Record<string, unknown>, source: string): CardActionTag[] {
+  const rawTags = readOptionalString(record.actionTags) || readOptionalString(record.tags);
+  if (!rawTags) {
+    return [];
+  }
+
+  const tagValues = rawTags
+    .split(/[|;、]/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return validateUniqueActionTags(
+    tagValues.map((value, index) =>
+      createActionTag(parseActionTagType(value, `actionTags[${index}]`, source))
+    ),
+    source
+  );
+}
+
+function parseActionTagsJson(value: unknown, source: string): CardActionTag[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`${source} must be an array.`);
+  }
+
+  return validateUniqueActionTags(
+    value.map((rawTag, index) => {
+      const tagSource = `${source}[${index}]`;
+      if (typeof rawTag === "string") {
+        return createActionTag(parseActionTagType(rawTag, "type", tagSource));
+      }
+
+      const record = readRecord(rawTag, tagSource);
+      return createActionTag(parseActionTagType(record.type, "type", tagSource));
+    }),
+    source
+  );
+}
+
+function validateUniqueActionTags(actionTags: CardActionTag[], source: string): CardActionTag[] {
+  const seenTypes = new Set<CardActionTagType>();
+
+  for (const tag of actionTags) {
+    if (seenTypes.has(tag.type)) {
+      throw new Error(`${source} duplicates action tag "${tag.type}".`);
+    }
+
+    seenTypes.add(tag.type);
+  }
+
+  return actionTags;
+}
+
+function createActionTag(type: CardActionTagType): CardActionTag {
+  switch (type) {
+    case "BONUS_ACTION":
+      return {
+        type,
+        label: "附贈動作",
+        trigger: "DISCARD"
+      };
+  }
 }
 
 function parseTargetingRecord(
@@ -566,6 +640,17 @@ function parseEffectType(
   }
 
   return effectType as CardEffectDefinition["type"];
+}
+
+function parseActionTagType(value: unknown, field: string, source: string): CardActionTagType {
+  const rawType = readRequiredString(value, field, source).toUpperCase().replaceAll("-", "_").replaceAll(" ", "_");
+  const normalizedType = rawType === "附贈動作" || rawType === "BONUS" ? "BONUS_ACTION" : rawType;
+
+  if (!ACTION_TAG_TYPES.has(normalizedType)) {
+    throw new Error(`${source} ${field} must be BONUS_ACTION.`);
+  }
+
+  return normalizedType as CardActionTagType;
 }
 
 function parseTransformScope(

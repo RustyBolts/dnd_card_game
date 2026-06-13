@@ -232,6 +232,151 @@ describe("card effects", () => {
     expect(state.zones.hand[playerId].length).toBe(handBefore + 2);
   });
 
+  it("triggers a bonus action card effect for free when discarded during the main phase", () => {
+    const store = createStartedGame(createBonusActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const targetId = "p2";
+    const card: CardInstance = {
+      instanceId: "test_quick_shot",
+      cardId: "quick_shot",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId].push(card);
+
+    const events = store.discardCard(playerId, card.instanceId, targetId);
+
+    expect(events.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(events.map((event) => event.type)).toContain("DAMAGE_APPLIED");
+    expect(events.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload).toMatchObject({
+      playerId,
+      cardInstanceId: card.instanceId,
+      cardId: "quick_shot",
+      actionTag: "BONUS_ACTION",
+      trigger: "DISCARD",
+      targetId
+    });
+    expect(state.players[playerId].energy).toBe(0);
+    expect(state.players[targetId].hp).toBe(18);
+    expect(card.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(card);
+  });
+
+  it("rejects a target-required bonus action discard without moving the card", () => {
+    const store = createStartedGame(createBonusActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_quick_shot",
+      cardId: "quick_shot",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId].push(card);
+
+    expect(() => store.discardCard(playerId, card.instanceId)).toThrow("requires a target");
+    expect(card.zone).toBe("HAND");
+    expect(state.zones.hand[playerId]).toContain(card);
+    expect(state.zones.temporary[playerId]).not.toContain(card);
+  });
+
+  it("triggers bonus action effects during the discard phase", () => {
+    const store = createStartedGame(createBonusActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const targetId = "p2";
+    const card: CardInstance = {
+      instanceId: "test_quick_shot",
+      cardId: "quick_shot",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.turnPhase = "DISCARD";
+    state.pendingDiscard = {
+      playerId,
+      retainCount: 0
+    };
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [card];
+
+    const events = store.discardCard(playerId, card.instanceId, targetId);
+
+    expect(events.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(events.map((event) => event.type)).toContain("DAMAGE_APPLIED");
+    expect(state.players[targetId].hp).toBe(18);
+    expect(card.zone).toBe("TEMPORARY");
+  });
+
+  it("starts a discard phase after end turn when a bonus action discard needs a target", () => {
+    const store = createStartedGame(createBonusActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const targetId = "p2";
+    const card: CardInstance = {
+      instanceId: "test_quick_shot",
+      cardId: "quick_shot",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].character!.abilityModifiers.intelligence = 0;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [card];
+
+    const endEvents = store.endTurn(playerId);
+
+    expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
+    expect(state.turnPhase).toBe("DISCARD");
+    expect(state.pendingDiscard).toEqual({ playerId, retainCount: 0 });
+    expect(state.zones.hand[playerId]).toContain(card);
+
+    const discardEvents = store.discardCard(playerId, card.instanceId, targetId);
+
+    expect(discardEvents.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(discardEvents.map((event) => event.type)).toContain("DAMAGE_APPLIED");
+    expect(discardEvents.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.players[targetId].hp).toBe(18);
+    expect(state.currentPlayerId).toBe(targetId);
+  });
+
+  it("triggers automatically resolved bonus action discards during end-turn discard cleanup", () => {
+    const store = createStartedGame(createAutomaticBonusActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const targetId = "p2";
+    const card: CardInstance = {
+      instanceId: "test_shockwave",
+      cardId: "shockwave",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].character!.abilityModifiers.intelligence = 0;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [card];
+
+    const endEvents = store.endTurn(playerId);
+
+    expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
+    expect(state.turnPhase).toBe("DISCARD");
+
+    const discardEvents = store.discardCard(playerId, card.instanceId);
+
+    expect(discardEvents.map((event) => event.type)).toContain("CARD_DISCARDED");
+    expect(discardEvents.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(discardEvents.map((event) => event.type)).toContain("DAMAGE_APPLIED");
+    expect(discardEvents.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.players[targetId].hp).toBe(19);
+    expect(card.zone).toBe("TEMPORARY");
+    expect(state.currentPlayerId).toBe(targetId);
+  });
+
   it("applies transform rules when the trigger card is played and reverts them at turn end", () => {
     const store = createStartedGame(createTransformCatalog());
     const state = store.getState();
@@ -348,7 +493,7 @@ describe("card effects", () => {
     expect(store.endTurn(playerId).filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(0);
   });
 
-  it("reverts a reversible transformed card before automatic end-turn discard", () => {
+  it("reverts a reversible transformed card before end-turn discard cleanup", () => {
     const store = createStartedGame(createTransformCatalog());
     const state = store.getState();
     const playerId = "p1";
@@ -371,15 +516,21 @@ describe("card effects", () => {
 
     expect(wolfForm.cardId).toBe("bear_form");
 
-    const events = store.endTurn(playerId);
-    const discardedEvent = events.find((event) => event.type === "CARD_DISCARDED");
+    const endEvents = store.endTurn(playerId);
 
-    expect(events.map((event) => event.type).slice(0, 2)).toEqual(["CARD_TRANSFORMED", "CARD_DISCARDED"]);
+    expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
+    expect(state.turnPhase).toBe("DISCARD");
+    expect(wolfForm.cardId).toBe("bear_form");
+
+    const discardEvents = store.discardCard(playerId, wolfForm.instanceId);
+    const discardedEvent = discardEvents.find((event) => event.type === "CARD_DISCARDED");
+
+    expect(discardEvents.map((event) => event.type).slice(0, 2)).toEqual(["CARD_TRANSFORMED", "CARD_DISCARDED"]);
     expect(discardedEvent?.payload.cardId).toBe("wolf_form");
     expect(wolfForm.cardId).toBe("wolf_form");
     expect(wolfForm.zone).toBe("TEMPORARY");
     expect(state.zones.temporary[playerId]).toContain(wolfForm);
-    expect(events.filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(1);
+    expect(discardEvents.filter((event) => event.type === "CARD_TRANSFORMED")).toHaveLength(1);
   });
 });
 
@@ -419,6 +570,54 @@ function createConsumableCatalog(): CardCatalog {
       }
     },
     starterDeckCardIds: ["scroll_burst"],
+    transformRules: []
+  };
+}
+
+function createBonusActionCatalog(): CardCatalog {
+  return {
+    version: "bonus-action-test",
+    cardDefinitions: {
+      quick_shot: {
+        cardId: "quick_shot",
+        name: "Quick Shot",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 2 damage.",
+        effect: { type: "DAMAGE", value: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+        actionTags: [{
+          type: "BONUS_ACTION",
+          label: "附贈動作",
+          trigger: "DISCARD"
+        }]
+      }
+    },
+    starterDeckCardIds: ["quick_shot"],
+    transformRules: []
+  };
+}
+
+function createAutomaticBonusActionCatalog(): CardCatalog {
+  return {
+    version: "automatic-bonus-action-test",
+    cardDefinitions: {
+      shockwave: {
+        cardId: "shockwave",
+        name: "Shockwave",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 1 damage to all enemies.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "GROUP", scope: "ENEMY", requiresTarget: false },
+        actionTags: [{
+          type: "BONUS_ACTION",
+          label: "附贈動作",
+          trigger: "DISCARD"
+        }]
+      }
+    },
+    starterDeckCardIds: ["shockwave"],
     transformRules: []
   };
 }

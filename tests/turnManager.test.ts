@@ -69,6 +69,27 @@ describe("turn manager", () => {
     expect(state.zones.temporary.p1).toContain(discardCard);
   });
 
+  it("starts a discard phase for end-turn cleanup even when no cards can be retained", () => {
+    const store = createStartedGame();
+    const state = store.getState();
+    const discardCard = createCard("discard_me", "fireball", "p1");
+    state.players.p1.character!.abilityModifiers.intelligence = 0;
+    state.zones.hand.p1 = [discardCard];
+
+    const endEvents = store.endTurn("p1");
+
+    expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
+    expect(state.turnPhase).toBe("DISCARD");
+    expect(state.pendingDiscard).toEqual({ playerId: "p1", retainCount: 0 });
+    expect(state.zones.hand.p1).toEqual([discardCard]);
+
+    const discardEvents = store.discardCard("p1", discardCard.instanceId);
+
+    expect(discardEvents.map((event) => event.type)).toContain("CARD_DISCARDED");
+    expect(discardEvents.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.zones.temporary.p1).toContain(discardCard);
+  });
+
   it("retains leftover energy up to the positive strength modifier on the player's next turn", () => {
     const store = createStartedGame();
     const state = store.getState();

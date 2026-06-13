@@ -61,12 +61,13 @@ export class CommandSender {
     });
   }
 
-  discard(cardInstanceId: string): void {
+  discard(cardInstanceId: string, targetId?: string): void {
     this.send({
       type: "DISCARD_CARD",
       requestId: createRequestId(),
       payload: {
-        cardInstanceId
+        cardInstanceId,
+        targetId
       }
     });
   }

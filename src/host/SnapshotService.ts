@@ -64,7 +64,8 @@ export class SnapshotService {
       description: definition?.description,
       effect: definition?.effect,
       targeting: definition?.targeting,
-      consumable: definition?.consumable
+      consumable: definition?.consumable,
+      actionTags: definition?.actionTags
     };
   }
 

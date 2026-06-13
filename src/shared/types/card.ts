@@ -18,6 +18,16 @@ export type CardTargeting = {
   requiresTarget: boolean;
 };
 
+export type CardActionTagType = "BONUS_ACTION";
+
+export type CardActionTrigger = "DISCARD";
+
+export type CardActionTag = {
+  type: CardActionTagType;
+  label: string;
+  trigger: CardActionTrigger;
+};
+
 export type CardDefinition = {
   cardId: string;
   name: string;
@@ -27,6 +37,7 @@ export type CardDefinition = {
   effect: CardEffectDefinition;
   targeting: CardTargeting;
   consumable?: boolean;
+  actionTags?: CardActionTag[];
 };
 
 export type CardInstance = {
@@ -44,5 +55,6 @@ export type VisibleCardInstance = CardInstance & {
   effect?: CardEffectDefinition;
   targeting?: CardTargeting;
   consumable?: boolean;
+  actionTags?: CardActionTag[];
   hidden?: boolean;
 };

@@ -37,7 +37,7 @@ Google Spreadsheet 建議建立四個工作表：
 ### `cards` 欄位
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,enabled
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,actionTags,enabled
 ```
 
 - `cardId`：穩定唯一 ID，牌組和遊戲狀態都用這個 ID。
@@ -52,6 +52,7 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 - `targetScope`：`SELF`、`ALLY`、`ENEMY` 或 `ANY`。
 - `targetRequired`：`SINGLE` 目標使用；`true` 表示 command 必須帶目標，`false` 表示玩家不需要手動指定目標。`GROUP` 目標會依 `targetScope` 自動解析全體目標，程式會將 `targetRequired` 視為 `false`。
 - `consumable`：可選。`true` 表示卡牌打出後進入消耗牌堆，不會從暫存牌堆重洗回牌庫。空白或未提供欄位時視為普通牌。
+- `actionTags`：可選。用 `|`、`;` 或 `、` 分隔多個標籤；目前支援 `BONUS_ACTION` 或中文 `附贈動作`。
 - `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
 
 目標欄位的建議用法：
@@ -65,7 +66,16 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 
 目前尚未提供手動選陣營流程；玩家加入時會依加入順序分到預設兩陣營：第 1、3、5 位玩家在 `team_1`，第 2、4、6 位玩家在 `team_2`。之後若需要自建陣營，可以擴充 join/lobby command，讓玩家在遊戲開始前選擇 `teamId`。
 
-為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有目標欄位或沒有 `consumable` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL` 與 `DRAW` 會推導成作用於自己且不需指定目標；未提供 `consumable` 時會視為普通牌。
+`BONUS_ACTION` / `附贈動作` 表示這張卡可直接出牌，也可以在棄牌動作發生時作為附贈動作觸發。附贈動作觸發時，Host/Worker 會先驗證目標，再將卡牌從手牌移到暫存牌堆，發出 `CARD_ACTION_TRIGGERED`，並以 0 能量消耗解析該卡原本的 `effect`。若該卡需要指定目標，`DISCARD_CARD` command 必須帶 `targetId`。目前前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張棄牌並選目標；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
+
+範例：
+
+```txt
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,actionTags,enabled
+quick_shot,快速射擊,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,,附贈動作,true
+```
+
+為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有目標欄位、沒有 `consumable` 欄位或沒有 `actionTags` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL` 與 `DRAW` 會推導成作用於自己且不需指定目標；未提供 `consumable` 時會視為普通牌，未提供 `actionTags` 時代表沒有微操作標籤。
 
 ### `starter_deck` 欄位
 
