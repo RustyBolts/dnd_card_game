@@ -28,6 +28,7 @@ export type GameZones = {
   deck: Record<string, CardInstance[]>;
   hand: Record<string, CardInstance[]>;
   prepared: Record<string, CardInstance[]>;
+  resolving: Record<string, CardInstance[]>;
   temporary: Record<string, CardInstance[]>;
   exhaust: Record<string, CardInstance[]>;
   board: CardInstance[];
@@ -56,6 +57,8 @@ export type VisibleGameZones = {
   handCounts: Record<string, number>;
   prepared: Record<string, VisibleCardInstance[]>;
   preparedCounts: Record<string, number>;
+  resolving: Record<string, VisibleCardInstance[]>;
+  resolvingCounts: Record<string, number>;
   temporary: Record<string, VisibleCardInstance[]>;
   temporaryCounts: Record<string, number>;
   exhaust: Record<string, VisibleCardInstance[]>;

@@ -207,6 +207,17 @@ export type CardActionTriggeredEvent = {
   };
 };
 
+export type CardResolvedEvent = {
+  type: "CARD_RESOLVED";
+  seq: number;
+  payload: {
+    playerId: string;
+    cardInstanceId: string;
+    cardId: string;
+    destinationZone: CardZone;
+  };
+};
+
 export type DiscardPhaseStartedEvent = {
   type: "DISCARD_PHASE_STARTED";
   seq: number;
@@ -314,6 +325,7 @@ export type GameEvent =
   | CardConsumedEvent
   | HpPaidEvent
   | CardActionTriggeredEvent
+  | CardResolvedEvent
   | DiscardPhaseStartedEvent
   | CardTransformedEvent
   | DamageAppliedEvent

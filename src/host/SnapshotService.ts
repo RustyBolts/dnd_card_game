@@ -11,6 +11,8 @@ export class SnapshotService {
     const deckCounts: VisibleGameState["zones"]["deckCounts"] = {};
     const prepared: VisibleGameState["zones"]["prepared"] = {};
     const preparedCounts: VisibleGameState["zones"]["preparedCounts"] = {};
+    const resolving: VisibleGameState["zones"]["resolving"] = {};
+    const resolvingCounts: VisibleGameState["zones"]["resolvingCounts"] = {};
     const temporary: VisibleGameState["zones"]["temporary"] = {};
     const temporaryCounts: VisibleGameState["zones"]["temporaryCounts"] = {};
     const exhaust: VisibleGameState["zones"]["exhaust"] = {};
@@ -21,6 +23,7 @@ export class SnapshotService {
       deckCounts[playerId] = state.zones.deck[playerId]?.length ?? 0;
       handCounts[playerId] = state.zones.hand[playerId]?.length ?? 0;
       preparedCounts[playerId] = state.zones.prepared[playerId]?.length ?? 0;
+      resolvingCounts[playerId] = state.zones.resolving[playerId]?.length ?? 0;
       temporaryCounts[playerId] = state.zones.temporary[playerId]?.length ?? 0;
       exhaustCounts[playerId] = state.zones.exhaust[playerId]?.length ?? 0;
       deck[playerId] = playerId === viewerId
@@ -30,6 +33,7 @@ export class SnapshotService {
         playerId === viewerId ? this.toVisibleCard(card) : this.toHiddenCard(card)
       );
       prepared[playerId] = (state.zones.prepared[playerId] ?? []).map((card) => this.toVisibleCard(card));
+      resolving[playerId] = (state.zones.resolving[playerId] ?? []).map((card) => this.toVisibleCard(card));
       temporary[playerId] = (state.zones.temporary[playerId] ?? []).map((card) => this.toVisibleCard(card));
       exhaust[playerId] = (state.zones.exhaust[playerId] ?? []).map((card) => this.toVisibleCard(card));
       drawPreview[playerId] = playerId === viewerId
@@ -48,6 +52,8 @@ export class SnapshotService {
         handCounts,
         prepared,
         preparedCounts,
+        resolving,
+        resolvingCounts,
         temporary,
         temporaryCounts,
         exhaust,

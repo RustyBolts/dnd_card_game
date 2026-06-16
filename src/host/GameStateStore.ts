@@ -14,6 +14,7 @@ import type {
   CardConsumedEvent,
   CardDrawnEvent,
   CardActionTriggeredEvent,
+  CardResolvedEvent,
   CardTransformedEvent,
   DeckRecycledEvent,
   GameEvent,
@@ -50,6 +51,8 @@ type PlayResourcePayment = {
   consumedCards: CardInstance[];
 };
 
+type ResolvedCardDestinationZone = Extract<CardZone, "TEMPORARY" | "EXHAUST">;
+
 export class GameStateStore {
   readonly cardDefinitions: Record<string, CardDefinition>;
   readonly cardCatalogVersion: string;
@@ -85,6 +88,7 @@ export class GameStateStore {
         deck: {},
         hand: {},
         prepared: {},
+        resolving: {},
         temporary: {},
         exhaust: {},
         board: [],
@@ -151,6 +155,7 @@ export class GameStateStore {
     this.state.zones.deck[playerId] = [];
     this.state.zones.hand[playerId] = [];
     this.state.zones.prepared[playerId] = [];
+    this.state.zones.resolving[playerId] = [];
     this.state.zones.temporary[playerId] = [];
     this.state.zones.exhaust[playerId] = [];
 
@@ -323,7 +328,7 @@ export class GameStateStore {
     player.energy -= definition.cost;
 
     this.removeCardFromHand(playerId, cardInstanceId);
-    const destinationZone = this.movePlayedCardToDestination(card, definition);
+    const destinationZone = this.moveCardToResolving(card);
 
     events.push({
       type: "CARD_PLAYED",
@@ -338,28 +343,13 @@ export class GameStateStore {
       }
     });
 
-    const effectEvents = resolveCardEffect({
-      state: this.state,
-      sourceCard: card,
-      sourceDefinition: definition,
-      playerId,
-      targetIds: resolvedTargetIds,
-      nextSeq: () => this.nextSeq(),
-      drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
-    });
-    events.push(...effectEvents);
-    if (this.state.status !== "ENDED") {
-      events.push(
-        ...this.resolvePreparedActionTriggers({
-          sourcePlayerId: playerId,
-          sourceDefinition: definition,
-          targetIds: resolvedTargetIds,
-          effectEvents
-        })
-      );
-    }
-    events.push(...this.applyTransformRules(playerId, card));
-    events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
+    events.push(
+      ...this.resolveCardFromResolving(playerId, card, definition, resolvedTargetIds, {
+        finalDestinationZone: this.getPlayedCardDestinationZone(definition),
+        triggerPreparedActions: true,
+        revertSourceForLeavingHand: true
+      })
+    );
 
     return events;
   }
@@ -378,7 +368,9 @@ export class GameStateStore {
 
     this.state.zones.hand[playerId].splice(index, 1);
     const revertEvents = this.revertPendingCardTransformForLeavingHand(playerId, card);
-    const destinationZone = this.moveCardToTemporary(card);
+    const destinationZone = actionTag
+      ? this.moveCardToResolving(card)
+      : this.moveCardToTemporary(card);
 
     const events: GameEvent[] = [
       ...revertEvents,
@@ -462,6 +454,7 @@ export class GameStateStore {
       );
       this.state.zones.hand[playerId] = [];
       this.state.zones.prepared[playerId] = [];
+      this.state.zones.resolving[playerId] = [];
       this.state.zones.temporary[playerId] = [];
       this.state.zones.exhaust[playerId] = [];
     }
@@ -619,9 +612,12 @@ export class GameStateStore {
       const actionTargetIds = actionTag
         ? this.resolveAutomaticActionTargetIds(definition, playerId)
         : null;
+      const shouldTriggerAction = Boolean(actionTag && actionTargetIds);
 
       events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
-      const destinationZone = this.moveCardToTemporary(card);
+      const destinationZone = shouldTriggerAction
+        ? this.moveCardToResolving(card)
+        : this.moveCardToTemporary(card);
       events.push({
         type: "CARD_DISCARDED",
         seq: this.nextSeq(),
@@ -796,7 +792,7 @@ export class GameStateStore {
     defaultTargetId: string
   ): GameEvent[] {
     this.removeCardFromPrepared(playerId, card.instanceId);
-    const destinationZone = this.movePlayedCardToDestination(card, definition);
+    const destinationZone = this.moveCardToResolving(card);
     const targetIds = this.resolvePreparedActionTargetIds(actionTag, playerId, defaultTargetId);
     const events: GameEvent[] = [
       {
@@ -816,17 +812,12 @@ export class GameStateStore {
     ];
 
     events.push(
-      ...resolveCardEffect({
-        state: this.state,
-        sourceCard: card,
-        sourceDefinition: definition,
-        playerId,
-        targetIds,
-        nextSeq: () => this.nextSeq(),
-        drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
+      ...this.resolveCardFromResolving(playerId, card, definition, targetIds, {
+        finalDestinationZone: this.getPlayedCardDestinationZone(definition),
+        triggerPreparedActions: false,
+        revertSourceForLeavingHand: false
       })
     );
-    events.push(...this.applyTransformRules(playerId, card));
     return events;
   }
 
@@ -1001,11 +992,34 @@ export class GameStateStore {
         cardId: definition.cardId,
         actionTag: actionTag.type,
         trigger: actionTag.trigger,
+        destinationZone: "RESOLVING",
         targetId: targetIds[0],
         targetIds
       }
     };
 
+    return [
+      actionEvent,
+      ...this.resolveCardFromResolving(playerId, card, definition, targetIds, {
+        finalDestinationZone: "TEMPORARY",
+        triggerPreparedActions: true,
+        revertSourceForLeavingHand: false
+      })
+    ];
+  }
+
+  private resolveCardFromResolving(
+    playerId: string,
+    card: CardInstance,
+    definition: CardDefinition,
+    targetIds: string[],
+    options: {
+      finalDestinationZone: ResolvedCardDestinationZone;
+      triggerPreparedActions: boolean;
+      revertSourceForLeavingHand: boolean;
+    }
+  ): GameEvent[] {
+    const events: GameEvent[] = [];
     const effectEvents = resolveCardEffect({
       state: this.state,
       sourceCard: card,
@@ -1016,28 +1030,41 @@ export class GameStateStore {
       drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
     });
 
-    return [
-      actionEvent,
-      ...effectEvents,
-      ...(this.state.status !== "ENDED"
-        ? this.resolvePreparedActionTriggers({
-            sourcePlayerId: playerId,
-            sourceDefinition: definition,
-            targetIds,
-            effectEvents
-          })
-        : [])
-    ];
+    events.push(...effectEvents);
+    if (options.triggerPreparedActions && this.state.status !== "ENDED") {
+      events.push(
+        ...this.resolvePreparedActionTriggers({
+          sourcePlayerId: playerId,
+          sourceDefinition: definition,
+          targetIds,
+          effectEvents
+        })
+      );
+    }
+
+    events.push(...this.applyTransformRules(playerId, card));
+    if (options.revertSourceForLeavingHand) {
+      events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
+    }
+    events.push(this.resolveCardToFinalZone(playerId, card, options.finalDestinationZone));
+    return events;
   }
 
-  private movePlayedCardToDestination(card: CardInstance, definition: CardDefinition): CardZone {
-    return definition.consumable ? this.moveCardToExhaust(card) : this.moveCardToTemporary(card);
+  private getPlayedCardDestinationZone(definition: CardDefinition): ResolvedCardDestinationZone {
+    return definition.consumable ? "EXHAUST" : "TEMPORARY";
   }
 
   private moveCardToPrepared(card: CardInstance): CardZone {
     card.zone = "PREPARED";
     this.state.zones.prepared[card.ownerId] ??= [];
     this.state.zones.prepared[card.ownerId].push(card);
+    return card.zone;
+  }
+
+  private moveCardToResolving(card: CardInstance): CardZone {
+    card.zone = "RESOLVING";
+    this.state.zones.resolving[card.ownerId] ??= [];
+    this.state.zones.resolving[card.ownerId].push(card);
     return card.zone;
   }
 
@@ -1053,6 +1080,36 @@ export class GameStateStore {
     this.state.zones.exhaust[card.ownerId] ??= [];
     this.state.zones.exhaust[card.ownerId].push(card);
     return card.zone;
+  }
+
+  private resolveCardToFinalZone(
+    playerId: string,
+    card: CardInstance,
+    destinationZone: ResolvedCardDestinationZone
+  ): CardResolvedEvent {
+    this.removeCardFromResolving(playerId, card.instanceId);
+    const finalZone = destinationZone === "EXHAUST"
+      ? this.moveCardToExhaust(card)
+      : this.moveCardToTemporary(card);
+
+    return {
+      type: "CARD_RESOLVED",
+      seq: this.nextSeq(),
+      payload: {
+        playerId,
+        cardInstanceId: card.instanceId,
+        cardId: card.cardId,
+        destinationZone: finalZone
+      }
+    };
+  }
+
+  private removeCardFromResolving(playerId: string, cardInstanceId: string): void {
+    const resolving = this.state.zones.resolving[playerId] ?? [];
+    const index = resolving.findIndex((candidate) => candidate.instanceId === cardInstanceId);
+    if (index !== -1) {
+      resolving.splice(index, 1);
+    }
   }
 
   private resolveRetainedEnergy(player: PlayerState): number {

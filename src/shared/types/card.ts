@@ -1,6 +1,15 @@
 export type CardType = "ATTACK" | "SKILL" | "MAGE" | "ITEM" | "STATUS";
 
-export type CardZone = "DECK" | "HAND" | "BOARD" | "PREPARED" | "TEMPORARY" | "EXHAUST" | "GRAVEYARD" | "EXILE";
+export type CardZone =
+  | "DECK"
+  | "HAND"
+  | "BOARD"
+  | "PREPARED"
+  | "RESOLVING"
+  | "TEMPORARY"
+  | "EXHAUST"
+  | "GRAVEYARD"
+  | "EXILE";
 
 export type CardEffectDefinition =
   | { type: "NONE" }

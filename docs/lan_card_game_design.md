@@ -236,6 +236,7 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
     "playerId": "p1",
     "cardInstanceId": "card_inst_001",
     "cardId": "fireball",
+    "destinationZone": "RESOLVING",
     "targetId": "p2"
   }
 }
@@ -253,22 +254,42 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
     "cardId": "quick_shot",
     "actionTag": "BONUS_ACTION",
     "trigger": "DISCARD",
+    "destinationZone": "RESOLVING",
     "targetId": "p2",
     "targetIds": ["p2"]
   }
 }
 ```
 
-目前 `BONUS_ACTION` 會在棄牌動作發生時觸發，並以 0 能量消耗解析該卡效果。前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張整理手牌；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
+`CARD_PLAYED.destinationZone = "RESOLVING"` 表示卡牌已從手牌移入結算區，效果尚在解析中；若 `REACTION_ACTION`、`COUNTER_ACTION` 或 `consumable=true` 的 `READY_ACTION` 被直接打出準備，則 `CARD_PLAYED.destinationZone = "PREPARED"`，不會立即解析效果。
 
-`REACTION_ACTION`、`COUNTER_ACTION` 會先以 `CARD_PLAYED.destinationZone = "PREPARED"` 進入準備牌堆。反應動作在其他玩家用 `DAMAGE` 指定自己並造成傷害時觸發，預設目標是攻擊者；反制動作在其他玩家用 `SKILL` 或 `MAGE` 指定自己時觸發，預設目標是施放者。`READY_ACTION` 可直接出牌並解析效果；只有被作為資源消耗，或同時有 `consumable=true` 導致出牌等同被消耗時，才會進入準備牌堆，並在自己的回合開始時觸發，預設目標是自己。觸發後 `CARD_ACTION_TRIGGERED.payload.destinationZone` 會指出卡牌移入 `TEMPORARY` 或 `EXHAUST`。
+目前 `BONUS_ACTION` 會在棄牌動作發生時觸發，並以 0 能量消耗解析該卡效果。觸發時 `CARD_DISCARDED.destinationZone` 與 `CARD_ACTION_TRIGGERED.destinationZone` 會是 `RESOLVING`；效果完成後再由 `CARD_RESOLVED` 指出最終區域。前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張整理手牌；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
+
+`REACTION_ACTION`、`COUNTER_ACTION` 會先以 `CARD_PLAYED.destinationZone = "PREPARED"` 進入準備牌堆。反應動作在其他玩家用 `DAMAGE` 指定自己並造成傷害時觸發，預設目標是攻擊者；反制動作在其他玩家用 `SKILL` 或 `MAGE` 指定自己時觸發，預設目標是施放者。`READY_ACTION` 可直接出牌並解析效果；只有被作為資源消耗，或同時有 `consumable=true` 導致出牌等同被消耗時，才會進入準備牌堆，並在自己的回合開始時觸發，預設目標是自己。準備牌堆觸發時 `CARD_ACTION_TRIGGERED.destinationZone = "RESOLVING"`；效果與變化檢查完成後再由 `CARD_RESOLVED.destinationZone` 指出卡牌移入 `TEMPORARY` 或 `EXHAUST`。
+
+### CARD_RESOLVED
+
+```json
+{
+  "type": "CARD_RESOLVED",
+  "seq": 6,
+  "payload": {
+    "playerId": "p1",
+    "cardInstanceId": "card_inst_001",
+    "cardId": "fireball",
+    "destinationZone": "TEMPORARY"
+  }
+}
+```
+
+`CARD_RESOLVED` 表示來源卡的效果、連鎖觸發與變化檢查已結束，並從結算區移入最終區域。普通直接出牌通常進 `TEMPORARY`；有 `consumable=true` 的直接出牌或準備牌堆觸發會進 `EXHAUST`。普通棄牌若沒有觸發 `BONUS_ACTION`，仍直接進 `TEMPORARY`，不會產生 `CARD_RESOLVED`。
 
 ### CARD_CONSUMED
 
 ```json
 {
   "type": "CARD_CONSUMED",
-  "seq": 6,
+  "seq": 7,
   "payload": {
     "playerId": "p1",
     "cardInstanceId": "card_inst_010",
@@ -286,7 +307,7 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 ```json
 {
   "type": "HP_PAID",
-  "seq": 7,
+  "seq": 8,
   "payload": {
     "playerId": "p1",
     "sourceCardInstanceId": "card_inst_001",
@@ -407,7 +428,7 @@ type CardInstance = {
   instanceId: string
   cardId: string
   ownerId: string
-  zone: 'DECK' | 'HAND' | 'BOARD' | 'PREPARED' | 'TEMPORARY' | 'EXHAUST' | 'GRAVEYARD' | 'EXILE'
+  zone: 'DECK' | 'HAND' | 'BOARD' | 'PREPARED' | 'RESOLVING' | 'TEMPORARY' | 'EXHAUST' | 'GRAVEYARD' | 'EXILE'
 }
 ```
 
@@ -430,10 +451,12 @@ type CardEffectDefinition =
 PLAY_CARD Command
  → 驗證卡牌存在於手牌
  → 驗證費用
- → 移動卡牌到棄牌區或場上
- → 解析效果
+ → 移動卡牌到結算區
  → 產生 CARD_PLAYED Event
+ → 解析效果
  → 產生 DAMAGE_APPLIED / HEAL_APPLIED / CARD_DRAWN Event
+ → 解析準備牌堆觸發與變化規則
+ → 產生 CARD_RESOLVED Event，將卡牌移到暫存或消耗牌堆
 ```
 
 ---

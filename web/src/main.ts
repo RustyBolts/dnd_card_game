@@ -411,7 +411,7 @@ function render(): void {
           ${characterRows}
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
-          <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
+          <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 結算 ${localState!.zones.resolvingCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
         </div>
       `;
     })
@@ -457,6 +457,11 @@ function renderPileControls(): void {
       key: "prepared",
       label: "準備牌堆",
       count: localState.zones.preparedCounts[playerId] ?? 0
+    },
+    {
+      key: "resolving",
+      label: "結算區",
+      count: localState.zones.resolvingCounts[playerId] ?? 0
     },
     {
       key: "temporary",
@@ -857,6 +862,14 @@ function getPileView(pileKey: string): { label: string; count: number; cards: Vi
       label: "準備牌堆",
       count: localState.zones.preparedCounts[playerId] ?? 0,
       cards: localState.zones.prepared[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "resolving") {
+    return {
+      label: "結算區",
+      count: localState.zones.resolvingCounts[playerId] ?? 0,
+      cards: localState.zones.resolving[playerId] ?? []
     };
   }
 

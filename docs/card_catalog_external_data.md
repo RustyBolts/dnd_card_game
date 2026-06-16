@@ -68,9 +68,9 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 
 目前尚未提供手動選陣營流程；玩家加入時會依加入順序分到預設兩陣營：第 1、3、5 位玩家在 `team_1`，第 2、4、6 位玩家在 `team_2`。之後若需要自建陣營，可以擴充 join/lobby command，讓玩家在遊戲開始前選擇 `teamId`。
 
-`BONUS_ACTION` / `附贈動作` 表示這張卡可直接出牌，也可以在棄牌動作發生時作為附贈動作觸發。附贈動作觸發時，Host/Worker 會先驗證目標，再將卡牌從手牌移到暫存牌堆，發出 `CARD_ACTION_TRIGGERED`，並以 0 能量消耗解析該卡原本的 `effect`。若該卡需要指定目標，`DISCARD_CARD` command 必須帶 `targetId`。目前前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張棄牌並選目標；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
+`BONUS_ACTION` / `附贈動作` 表示這張卡可直接出牌，也可以在棄牌動作發生時作為附贈動作觸發。附贈動作觸發時，Host/Worker 會先驗證目標，再將卡牌從手牌移到結算區，發出 `CARD_DISCARDED` 與 `CARD_ACTION_TRIGGERED`，並以 0 能量消耗解析該卡原本的 `effect`。效果與變化檢查完成後會發出 `CARD_RESOLVED`，目前附贈棄牌觸發後會移入暫存牌堆。若該卡需要指定目標，`DISCARD_CARD` command 必須帶 `targetId`。沒有觸發附贈動作的普通棄牌會直接移入暫存牌堆，不進入結算區。目前前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張棄牌並選目標；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
 
-`REACTION_ACTION` / `反應動作`、`COUNTER_ACTION` / `反制動作` 會在打出後先移入準備牌堆，不立即解析效果。反應動作在其他玩家以 `DAMAGE` 指定自己並造成傷害時觸發，該攻擊者會成為預設目標；反制動作在其他玩家以 `SKILL` 或 `MAGE` 指定自己時觸發，施放者會成為預設目標。`READY_ACTION` / `準備動作` 卡牌可直接出牌並正常解析；只有當它被作為額外資源消耗，或這張牌本身同時有 `consumable=true` 而出牌等同被消耗時，才會移入準備牌堆，並在回到自己的回合開始時觸發，自己會成為預設目標。觸發生效後，`consumable=true` 的卡移入消耗牌堆，其他卡移入暫存牌堆。
+`REACTION_ACTION` / `反應動作`、`COUNTER_ACTION` / `反制動作` 會在打出後先移入準備牌堆，不立即解析效果。反應動作在其他玩家以 `DAMAGE` 指定自己並造成傷害時觸發，該攻擊者會成為預設目標；反制動作在其他玩家以 `SKILL` 或 `MAGE` 指定自己時觸發，施放者會成為預設目標。`READY_ACTION` / `準備動作` 卡牌可直接出牌並正常解析；只有當它被作為額外資源消耗，或這張牌本身同時有 `consumable=true` 而出牌等同被消耗時，才會移入準備牌堆，並在回到自己的回合開始時觸發，自己會成為預設目標。準備牌堆中的卡觸發時會先移入結算區，效果與變化檢查完成後才移到最終區域；`consumable=true` 的卡移入消耗牌堆，其他卡移入暫存牌堆。
 
 範例：
 
@@ -101,7 +101,7 @@ ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming
 ```
 
 - `ruleId`：穩定唯一 ID，用於事件、測試與除錯。
-- `triggerCardId`：哪張卡生效時觸發規則。一般直接出牌會在出牌效果解析後檢查；準備牌堆中的卡會在準備動作實際觸發生效後檢查，不會在單純移入準備牌堆時檢查。
+- `triggerCardId`：哪張卡生效時觸發規則。一般直接出牌、附贈棄牌觸發、準備牌堆觸發都會在效果解析後檢查；準備牌堆中的卡不會在單純移入準備牌堆時檢查。
 - `sourceCardId`：被轉換前的卡牌 ID。
 - `targetCardId`：轉換後的卡牌 ID，必須與 `sourceCardId` 不同。
 - `scope`：目前支援 `hand` 或 `OWNER_HAND`，代表觸發者自己的手牌。

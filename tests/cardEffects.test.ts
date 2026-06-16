@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseCardCatalogFromCsv } from "../src/shared/data/cardCatalog.js";
 import type { CardInstance } from "../src/shared/types/card.js";
 import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
+import type { CardResolvedEvent, GameEvent } from "../src/shared/types/network.js";
 import { createStartedGame, createStartedGameWithPlayers } from "./testUtils.js";
 
 describe("card effects", () => {
@@ -47,7 +48,8 @@ describe("card effects", () => {
 
     const events = store.playCard(playerId, card.instanceId, "p2");
 
-    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("EXHAUST");
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload.destinationZone).toBe("EXHAUST");
     expect(card.zone).toBe("EXHAUST");
     expect(state.zones.exhaust[playerId]).toContain(card);
     expect(state.zones.temporary[playerId]).not.toContain(card);
@@ -232,6 +234,81 @@ describe("card effects", () => {
     expect(state.zones.hand[playerId].length).toBe(handBefore + 2);
   });
 
+  it("keeps a played draw card out of the recycled temporary pile until it resolves", () => {
+    const store = createStartedGame(createDrawResolutionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_focus_draw",
+      cardId: "focus_draw",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const recycledCard: CardInstance = {
+      instanceId: "test_recycled_focus",
+      cardId: "recycled_focus",
+      ownerId: playerId,
+      zone: "TEMPORARY"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.deck[playerId] = [];
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.temporary[playerId] = [recycledCard];
+
+    const events = store.playCard(playerId, sourceCard.instanceId);
+
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "DECK_RECYCLED")?.payload.recycledCount).toBe(1);
+    expect(events.find((event) => event.type === "CARD_DRAWN")?.payload.cardInstanceId).toBe(recycledCard.instanceId);
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload).toMatchObject({
+      cardInstanceId: sourceCard.instanceId,
+      destinationZone: "TEMPORARY"
+    });
+    expect(sourceCard.zone).toBe("TEMPORARY");
+    expect(state.zones.hand[playerId]).not.toContain(sourceCard);
+    expect(state.zones.deck[playerId]).not.toContain(sourceCard);
+    expect(state.zones.temporary[playerId]).toContain(sourceCard);
+  });
+
+  it("keeps a bonus action draw card out of the recycled temporary pile until it resolves", () => {
+    const store = createStartedGame(createBonusDrawResolutionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_bonus_draw",
+      cardId: "bonus_draw",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const recycledCard: CardInstance = {
+      instanceId: "test_recycled_focus",
+      cardId: "recycled_focus",
+      ownerId: playerId,
+      zone: "TEMPORARY"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.deck[playerId] = [];
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.temporary[playerId] = [recycledCard];
+
+    const events = store.discardCard(playerId, sourceCard.instanceId);
+
+    expect(events.find((event) => event.type === "CARD_DISCARDED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "DECK_RECYCLED")?.payload.recycledCount).toBe(1);
+    expect(events.find((event) => event.type === "CARD_DRAWN")?.payload.cardInstanceId).toBe(recycledCard.instanceId);
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload).toMatchObject({
+      cardInstanceId: sourceCard.instanceId,
+      destinationZone: "TEMPORARY"
+    });
+    expect(sourceCard.zone).toBe("TEMPORARY");
+    expect(state.zones.hand[playerId]).not.toContain(sourceCard);
+    expect(state.zones.deck[playerId]).not.toContain(sourceCard);
+    expect(state.zones.temporary[playerId]).toContain(sourceCard);
+  });
+
   it("triggers a bonus action card effect for free when discarded during the main phase", () => {
     const store = createStartedGame(createBonusActionCatalog());
     const state = store.getState();
@@ -257,7 +334,13 @@ describe("card effects", () => {
       cardId: "quick_shot",
       actionTag: "BONUS_ACTION",
       trigger: "DISCARD",
+      destinationZone: "RESOLVING",
       targetId
+    });
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload).toMatchObject({
+      playerId,
+      cardInstanceId: card.instanceId,
+      destinationZone: "TEMPORARY"
     });
     expect(state.players[playerId].energy).toBe(0);
     expect(state.players[targetId].hp).toBe(18);
@@ -416,9 +499,10 @@ describe("card effects", () => {
       cardInstanceId: reactionCard.instanceId,
       actionTag: "REACTION_ACTION",
       trigger: "DAMAGE_TARGETED",
-      destinationZone: "EXHAUST",
+      destinationZone: "RESOLVING",
       targetId: attackerId
     });
+    expect(findResolvedEvent(events, reactionCard.instanceId)?.payload.destinationZone).toBe("EXHAUST");
     expect(state.players[defenderId].hp).toBe(18);
     expect(state.players[attackerId].hp).toBe(19);
     expect(reactionCard.zone).toBe("EXHAUST");
@@ -481,9 +565,10 @@ describe("card effects", () => {
       cardInstanceId: reactionCard.instanceId,
       actionTag: "REACTION_ACTION",
       trigger: "DAMAGE_TARGETED",
-      destinationZone: "EXHAUST",
+      destinationZone: "RESOLVING",
       targetId: attackerId
     });
+    expect(findResolvedEvent(events, reactionCard.instanceId)?.payload.destinationZone).toBe("EXHAUST");
     expect(state.players[defenderId].hp).toBe(18);
     expect(state.players[attackerId].hp).toBe(19);
     expect(reactionCard.zone).toBe("EXHAUST");
@@ -521,9 +606,10 @@ describe("card effects", () => {
       cardInstanceId: counterCard.instanceId,
       actionTag: "COUNTER_ACTION",
       trigger: "MAGE_TARGETED",
-      destinationZone: "TEMPORARY",
+      destinationZone: "RESOLVING",
       targetId: casterId
     });
+    expect(findResolvedEvent(events, counterCard.instanceId)?.payload.destinationZone).toBe("TEMPORARY");
     expect(state.players[defenderId].hp).toBe(19);
     expect(state.players[casterId].hp).toBe(18);
     expect(counterCard.zone).toBe("TEMPORARY");
@@ -548,7 +634,8 @@ describe("card effects", () => {
     const events = store.playCard(playerId, card.instanceId);
 
     expect(events.map((event) => event.type)).toContain("HEAL_APPLIED");
-    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("TEMPORARY");
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload.destinationZone).toBe("TEMPORARY");
     expect(state.players[playerId].hp).toBe(13);
     expect(card.zone).toBe("TEMPORARY");
     expect(state.zones.prepared[playerId]).not.toContain(card);
@@ -626,7 +713,8 @@ describe("card effects", () => {
       amount: 3,
       hpAfter: 7
     });
-    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("TEMPORARY");
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(findResolvedEvent(events, sourceCard.instanceId)?.payload.destinationZone).toBe("TEMPORARY");
     expect(state.players[playerId].hp).toBe(7);
     expect(readyResource.zone).toBe("PREPARED");
     expect(normalResource.zone).toBe("EXHAUST");
@@ -728,9 +816,10 @@ describe("card effects", () => {
       cardInstanceId: readyCard.instanceId,
       actionTag: "READY_ACTION",
       trigger: "TURN_STARTED",
-      destinationZone: "TEMPORARY",
+      destinationZone: "RESOLVING",
       targetId: playerId
     });
+    expect(findResolvedEvent(events, readyCard.instanceId)?.payload.destinationZone).toBe("TEMPORARY");
     expect(state.players[playerId].hp).toBe(13);
     expect(readyCard.zone).toBe("TEMPORARY");
     expect(state.zones.temporary[playerId]).toContain(readyCard);
@@ -963,6 +1052,12 @@ describe("card effects", () => {
   });
 });
 
+function findResolvedEvent(events: GameEvent[], cardInstanceId: string): CardResolvedEvent | undefined {
+  return events.find((event): event is CardResolvedEvent =>
+    event.type === "CARD_RESOLVED" && event.payload.cardInstanceId === cardInstanceId
+  );
+}
+
 function createExternalHealingCatalog(): CardCatalog {
   return parseCardCatalogFromCsv({
     cardsCsv:
@@ -1047,6 +1142,61 @@ function createAutomaticBonusActionCatalog(): CardCatalog {
       }
     },
     starterDeckCardIds: ["shockwave"],
+    transformRules: []
+  };
+}
+
+function createDrawResolutionCatalog(): CardCatalog {
+  return {
+    version: "draw-resolution-test",
+    cardDefinitions: {
+      focus_draw: {
+        cardId: "focus_draw",
+        name: "Focus Draw",
+        cost: 0,
+        type: "SKILL",
+        description: "Draw 1 card.",
+        effect: { type: "DRAW", count: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      recycled_focus: {
+        cardId: "recycled_focus",
+        name: "Recycled Focus",
+        cost: 0,
+        type: "SKILL",
+        description: "No effect.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      }
+    },
+    starterDeckCardIds: ["focus_draw", "recycled_focus"],
+    transformRules: []
+  };
+}
+
+function createBonusDrawResolutionCatalog(): CardCatalog {
+  const drawCatalog = createDrawResolutionCatalog();
+
+  return {
+    version: "bonus-draw-resolution-test",
+    cardDefinitions: {
+      ...drawCatalog.cardDefinitions,
+      bonus_draw: {
+        cardId: "bonus_draw",
+        name: "Bonus Draw",
+        cost: 0,
+        type: "SKILL",
+        description: "Discard to draw 1 card.",
+        effect: { type: "DRAW", count: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        actionTags: [{
+          type: "BONUS_ACTION",
+          label: "附贈動作",
+          trigger: "DISCARD"
+        }]
+      }
+    },
+    starterDeckCardIds: ["bonus_draw", ...drawCatalog.starterDeckCardIds],
     transformRules: []
   };
 }
