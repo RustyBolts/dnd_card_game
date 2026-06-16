@@ -377,6 +377,435 @@ describe("card effects", () => {
     expect(state.currentPlayerId).toBe(targetId);
   });
 
+  it("triggers prepared reaction actions from another player's bonus action discard", () => {
+    const store = createStartedGame(createBonusPreparedActionCatalog());
+    const state = store.getState();
+    const defenderId = "p1";
+    const attackerId = "p2";
+    const reactionCard: CardInstance = {
+      instanceId: "test_riposte",
+      cardId: "riposte",
+      ownerId: defenderId,
+      zone: "PREPARED"
+    };
+    const bonusCard: CardInstance = {
+      instanceId: "test_quick_shot",
+      cardId: "quick_shot",
+      ownerId: attackerId,
+      zone: "HAND"
+    };
+
+    state.currentPlayerId = attackerId;
+    state.players[attackerId].energy = 0;
+    state.zones.prepared[defenderId] = [reactionCard];
+    state.zones.hand[attackerId].push(bonusCard);
+
+    const events = store.discardCard(attackerId, bonusCard.instanceId, defenderId);
+    const actionEvents = events.filter((event) => event.type === "CARD_ACTION_TRIGGERED");
+
+    expect(actionEvents).toHaveLength(2);
+    expect(actionEvents[0]?.payload).toMatchObject({
+      playerId: attackerId,
+      cardInstanceId: bonusCard.instanceId,
+      actionTag: "BONUS_ACTION",
+      trigger: "DISCARD",
+      targetId: defenderId
+    });
+    expect(actionEvents[1]?.payload).toMatchObject({
+      playerId: defenderId,
+      cardInstanceId: reactionCard.instanceId,
+      actionTag: "REACTION_ACTION",
+      trigger: "DAMAGE_TARGETED",
+      destinationZone: "EXHAUST",
+      targetId: attackerId
+    });
+    expect(state.players[defenderId].hp).toBe(18);
+    expect(state.players[attackerId].hp).toBe(19);
+    expect(reactionCard.zone).toBe("EXHAUST");
+    expect(state.zones.prepared[defenderId]).not.toContain(reactionCard);
+    expect(state.zones.exhaust[defenderId]).toContain(reactionCard);
+  });
+
+  it("plays prepared action cards into the prepared pile without resolving their effect", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_riposte",
+      cardId: "riposte",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.zones.hand[playerId].push(card);
+
+    const events = store.playCard(playerId, card.instanceId);
+    const playedEvent = events.find((event) => event.type === "CARD_PLAYED");
+
+    expect(playedEvent?.payload.destinationZone).toBe("PREPARED");
+    expect(events.map((event) => event.type)).not.toContain("DAMAGE_APPLIED");
+    expect(state.players[playerId].energy).toBe(0);
+    expect(card.zone).toBe("PREPARED");
+    expect(state.zones.prepared[playerId]).toContain(card);
+  });
+
+  it("triggers reaction actions when another player's damage targets the prepared card owner", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const defenderId = "p1";
+    const attackerId = "p2";
+    const reactionCard: CardInstance = {
+      instanceId: "test_riposte",
+      cardId: "riposte",
+      ownerId: defenderId,
+      zone: "PREPARED"
+    };
+    const attackCard: CardInstance = {
+      instanceId: "test_firebolt",
+      cardId: "firebolt",
+      ownerId: attackerId,
+      zone: "HAND"
+    };
+
+    state.currentPlayerId = attackerId;
+    state.players[attackerId].energy = 2;
+    state.zones.prepared[defenderId] = [reactionCard];
+    state.zones.hand[attackerId].push(attackCard);
+
+    const events = store.playCard(attackerId, attackCard.instanceId, defenderId);
+
+    expect(events.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(events.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload).toMatchObject({
+      playerId: defenderId,
+      cardInstanceId: reactionCard.instanceId,
+      actionTag: "REACTION_ACTION",
+      trigger: "DAMAGE_TARGETED",
+      destinationZone: "EXHAUST",
+      targetId: attackerId
+    });
+    expect(state.players[defenderId].hp).toBe(18);
+    expect(state.players[attackerId].hp).toBe(19);
+    expect(reactionCard.zone).toBe("EXHAUST");
+    expect(state.zones.prepared[defenderId]).not.toContain(reactionCard);
+    expect(state.zones.exhaust[defenderId]).toContain(reactionCard);
+  });
+
+  it("triggers counter actions when another player's skill or mage card targets the owner", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const defenderId = "p1";
+    const casterId = "p2";
+    const counterCard: CardInstance = {
+      instanceId: "test_counter",
+      cardId: "counter_jab",
+      ownerId: defenderId,
+      zone: "PREPARED"
+    };
+    const mageCard: CardInstance = {
+      instanceId: "test_hex",
+      cardId: "hex",
+      ownerId: casterId,
+      zone: "HAND"
+    };
+
+    state.currentPlayerId = casterId;
+    state.players[casterId].energy = 1;
+    state.zones.prepared[defenderId] = [counterCard];
+    state.zones.hand[casterId].push(mageCard);
+
+    const events = store.playCard(casterId, mageCard.instanceId, defenderId);
+
+    expect(events.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload).toMatchObject({
+      playerId: defenderId,
+      cardInstanceId: counterCard.instanceId,
+      actionTag: "COUNTER_ACTION",
+      trigger: "MAGE_TARGETED",
+      destinationZone: "TEMPORARY",
+      targetId: casterId
+    });
+    expect(state.players[defenderId].hp).toBe(19);
+    expect(state.players[casterId].hp).toBe(18);
+    expect(counterCard.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[defenderId]).toContain(counterCard);
+  });
+
+  it("plays non-consumable ready action cards directly instead of preparing them", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_guarded_recovery",
+      cardId: "guarded_recovery",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.players[playerId].hp = 10;
+    state.zones.hand[playerId].push(card);
+
+    const events = store.playCard(playerId, card.instanceId);
+
+    expect(events.map((event) => event.type)).toContain("HEAL_APPLIED");
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("TEMPORARY");
+    expect(state.players[playerId].hp).toBe(13);
+    expect(card.zone).toBe("TEMPORARY");
+    expect(state.zones.prepared[playerId]).not.toContain(card);
+  });
+
+  it("plays consumable ready action cards into the prepared pile", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_stored_blessing",
+      cardId: "stored_blessing",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.players[playerId].hp = 10;
+    state.zones.hand[playerId].push(card);
+
+    const events = store.playCard(playerId, card.instanceId);
+
+    expect(events.map((event) => event.type)).not.toContain("HEAL_APPLIED");
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("PREPARED");
+    expect(state.players[playerId].hp).toBe(10);
+    expect(card.zone).toBe("PREPARED");
+    expect(state.zones.prepared[playerId]).toContain(card);
+  });
+
+  it("pays card and hp resource costs before resolving a played card", () => {
+    const store = createStartedGame(createResourceCostCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_blood_rite",
+      cardId: "blood_rite",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const readyResource: CardInstance = {
+      instanceId: "test_stored_blessing",
+      cardId: "stored_blessing",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const normalResource: CardInstance = {
+      instanceId: "test_dagger",
+      cardId: "dagger_strike",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].hp = 10;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [sourceCard, readyResource, normalResource];
+
+    const events = store.playCard(playerId, sourceCard.instanceId, undefined, [
+      readyResource.instanceId,
+      normalResource.instanceId
+    ]);
+    const consumedEvents = events.filter((event) => event.type === "CARD_CONSUMED");
+
+    expect(consumedEvents).toHaveLength(2);
+    expect(consumedEvents[0]?.payload).toMatchObject({
+      cardInstanceId: readyResource.instanceId,
+      destinationZone: "PREPARED"
+    });
+    expect(consumedEvents[1]?.payload).toMatchObject({
+      cardInstanceId: normalResource.instanceId,
+      destinationZone: "EXHAUST"
+    });
+    expect(events.find((event) => event.type === "HP_PAID")?.payload).toMatchObject({
+      playerId,
+      sourceCardInstanceId: sourceCard.instanceId,
+      amount: 3,
+      hpAfter: 7
+    });
+    expect(events.find((event) => event.type === "CARD_PLAYED")?.payload.destinationZone).toBe("TEMPORARY");
+    expect(state.players[playerId].hp).toBe(7);
+    expect(readyResource.zone).toBe("PREPARED");
+    expect(normalResource.zone).toBe("EXHAUST");
+    expect(sourceCard.zone).toBe("TEMPORARY");
+    expect(state.zones.prepared[playerId]).toContain(readyResource);
+    expect(state.zones.exhaust[playerId]).toContain(normalResource);
+    expect(state.zones.temporary[playerId]).toContain(sourceCard);
+  });
+
+  it("rejects hp resource costs that would reduce the player to 0 hp", () => {
+    const store = createStartedGame(createResourceCostCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_blood_rite",
+      cardId: "blood_rite",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const readyResource: CardInstance = {
+      instanceId: "test_stored_blessing",
+      cardId: "stored_blessing",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const normalResource: CardInstance = {
+      instanceId: "test_dagger",
+      cardId: "dagger_strike",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].hp = 3;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [sourceCard, readyResource, normalResource];
+
+    expect(() => store.playCard(playerId, sourceCard.instanceId, undefined, [
+      readyResource.instanceId,
+      normalResource.instanceId
+    ])).toThrow("cannot reduce the player to 0 HP");
+    expect(state.players[playerId].hp).toBe(3);
+    expect(sourceCard.zone).toBe("HAND");
+    expect(readyResource.zone).toBe("HAND");
+    expect(normalResource.zone).toBe("HAND");
+    expect(state.zones.hand[playerId]).toEqual([sourceCard, readyResource, normalResource]);
+  });
+
+  it("rejects card resource costs until the required number of cards is selected", () => {
+    const store = createStartedGame(createResourceCostCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_blood_rite",
+      cardId: "blood_rite",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const readyResource: CardInstance = {
+      instanceId: "test_stored_blessing",
+      cardId: "stored_blessing",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].hp = 10;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [sourceCard, readyResource];
+
+    expect(() => store.playCard(playerId, sourceCard.instanceId, undefined, [
+      readyResource.instanceId
+    ])).toThrow("requires 2 consumed card resource");
+    expect(state.zones.hand[playerId]).toEqual([sourceCard, readyResource]);
+  });
+
+  it("triggers ready actions at the start of their owner's turn with self as the target", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const currentPlayerId = "p2";
+    const readyCard: CardInstance = {
+      instanceId: "test_guarded_recovery",
+      cardId: "guarded_recovery",
+      ownerId: playerId,
+      zone: "PREPARED"
+    };
+
+    state.currentPlayerId = currentPlayerId;
+    state.zones.hand[currentPlayerId] = [];
+    state.players[playerId].drawPerTurn = 0;
+    state.players[playerId].character!.abilityModifiers.dexterity = 0;
+    state.players[playerId].hp = 10;
+    state.zones.prepared[playerId] = [readyCard];
+
+    const events = store.endTurn(currentPlayerId);
+
+    expect(events.map((event) => event.type)).toContain("TURN_STARTED");
+    expect(events.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload).toMatchObject({
+      playerId,
+      cardInstanceId: readyCard.instanceId,
+      actionTag: "READY_ACTION",
+      trigger: "TURN_STARTED",
+      destinationZone: "TEMPORARY",
+      targetId: playerId
+    });
+    expect(state.players[playerId].hp).toBe(13);
+    expect(readyCard.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(readyCard);
+  });
+
+  it("does not apply transform rules when a prepared action only enters the prepared pile", () => {
+    const store = createStartedGame(createPreparedTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_delayed_stance",
+      cardId: "delayed_stance",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.zones.hand[playerId] = [catalyst, wolfForm];
+
+    const events = store.playCard(playerId, catalyst.instanceId);
+
+    expect(events.map((event) => event.type)).not.toContain("CARD_TRANSFORMED");
+    expect(catalyst.zone).toBe("PREPARED");
+    expect(wolfForm.cardId).toBe("wolf_form");
+    expect(state.zones.prepared[playerId]).toContain(catalyst);
+  });
+
+  it("applies transform rules when a prepared action triggers", () => {
+    const store = createStartedGame(createPreparedTransformCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const currentPlayerId = "p2";
+    const catalyst: CardInstance = {
+      instanceId: "test_delayed_stance",
+      cardId: "delayed_stance",
+      ownerId: playerId,
+      zone: "PREPARED"
+    };
+    const wolfForm: CardInstance = {
+      instanceId: "test_wolf_form",
+      cardId: "wolf_form",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.currentPlayerId = currentPlayerId;
+    state.zones.hand[currentPlayerId] = [];
+    state.players[playerId].drawPerTurn = 0;
+    state.players[playerId].character!.abilityModifiers.dexterity = 0;
+    state.zones.prepared[playerId] = [catalyst];
+    state.zones.hand[playerId] = [wolfForm];
+
+    const events = store.endTurn(currentPlayerId);
+    const transformEvents = events.filter((event) => event.type === "CARD_TRANSFORMED");
+
+    expect(events.map((event) => event.type)).toContain("CARD_ACTION_TRIGGERED");
+    expect(transformEvents).toHaveLength(1);
+    expect(transformEvents[0]?.payload).toMatchObject({
+      playerId,
+      sourceId: catalyst.instanceId,
+      cardInstanceId: wolfForm.instanceId
+    });
+    expect(transformEvents[0]?.payload.privateCardData).toEqual({
+      previousCardId: "wolf_form",
+      cardId: "bear_form"
+    });
+    expect(wolfForm.cardId).toBe("bear_form");
+  });
+
   it("applies transform rules when the trigger card is played and reverts them at turn end", () => {
     const store = createStartedGame(createTransformCatalog());
     const state = store.getState();
@@ -619,6 +1048,193 @@ function createAutomaticBonusActionCatalog(): CardCatalog {
     },
     starterDeckCardIds: ["shockwave"],
     transformRules: []
+  };
+}
+
+function createBonusPreparedActionCatalog(): CardCatalog {
+  const bonusCatalog = createBonusActionCatalog();
+  const preparedCatalog = createPreparedActionCatalog();
+
+  return {
+    version: "bonus-prepared-action-test",
+    cardDefinitions: {
+      ...bonusCatalog.cardDefinitions,
+      ...preparedCatalog.cardDefinitions
+    },
+    starterDeckCardIds: ["quick_shot", ...preparedCatalog.starterDeckCardIds],
+    transformRules: []
+  };
+}
+
+function createResourceCostCatalog(): CardCatalog {
+  const preparedCatalog = createPreparedActionCatalog();
+
+  return {
+    version: "resource-cost-test",
+    cardDefinitions: {
+      blood_rite: {
+        cardId: "blood_rite",
+        name: "Blood Rite",
+        cost: 0,
+        type: "SKILL",
+        description: "Pay 3 HP and consume 2 cards.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        resourceCosts: {
+          consumeCardCount: 2,
+          hp: 3
+        }
+      },
+      dagger_strike: {
+        cardId: "dagger_strike",
+        name: "Dagger Strike",
+        cost: 1,
+        type: "ATTACK",
+        description: "Deal 1 damage.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      stored_blessing: preparedCatalog.cardDefinitions.stored_blessing
+    },
+    starterDeckCardIds: ["blood_rite", "dagger_strike", "stored_blessing"],
+    transformRules: []
+  };
+}
+
+function createPreparedActionCatalog(): CardCatalog {
+  return {
+    version: "prepared-action-test",
+    cardDefinitions: {
+      riposte: {
+        cardId: "riposte",
+        name: "Riposte",
+        cost: 1,
+        type: "ATTACK",
+        description: "Prepare to deal 1 damage back to an attacker.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+        consumable: true,
+        actionTags: [{
+          type: "REACTION_ACTION",
+          label: "反應動作",
+          trigger: "DAMAGE_TARGETED"
+        }]
+      },
+      counter_jab: {
+        cardId: "counter_jab",
+        name: "Counter Jab",
+        cost: 1,
+        type: "SKILL",
+        description: "Prepare to deal 2 damage to a caster.",
+        effect: { type: "DAMAGE", value: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+        actionTags: [{
+          type: "COUNTER_ACTION",
+          label: "反制動作",
+          trigger: "SKILL_TARGETED"
+        }]
+      },
+      guarded_recovery: {
+        cardId: "guarded_recovery",
+        name: "Guarded Recovery",
+        cost: 1,
+        type: "SKILL",
+        description: "Prepare to heal yourself at the start of your next turn.",
+        effect: { type: "HEAL", value: 3 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        actionTags: [{
+          type: "READY_ACTION",
+          label: "準備動作",
+          trigger: "TURN_STARTED"
+        }]
+      },
+      stored_blessing: {
+        cardId: "stored_blessing",
+        name: "Stored Blessing",
+        cost: 1,
+        type: "SKILL",
+        description: "Prepare to heal yourself at the start of your next turn.",
+        effect: { type: "HEAL", value: 4 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true,
+        actionTags: [{
+          type: "READY_ACTION",
+          label: "準備動作",
+          trigger: "TURN_STARTED"
+        }]
+      },
+      firebolt: {
+        cardId: "firebolt",
+        name: "Firebolt",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 2 damage.",
+        effect: { type: "DAMAGE", value: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      hex: {
+        cardId: "hex",
+        name: "Hex",
+        cost: 1,
+        type: "MAGE",
+        description: "Deal 1 damage.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      }
+    },
+    starterDeckCardIds: ["riposte", "counter_jab", "guarded_recovery", "stored_blessing", "firebolt", "hex"],
+    transformRules: []
+  };
+}
+
+function createPreparedTransformCatalog(): CardCatalog {
+  return {
+    version: "prepared-transform-test",
+    cardDefinitions: {
+      delayed_stance: {
+        cardId: "delayed_stance",
+        name: "Delayed Stance",
+        cost: 1,
+        type: "SKILL",
+        description: "Prepare a delayed transformation.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true,
+        actionTags: [{
+          type: "READY_ACTION",
+          label: "準備動作",
+          trigger: "TURN_STARTED"
+        }]
+      },
+      wolf_form: {
+        cardId: "wolf_form",
+        name: "Wolf Form",
+        cost: 1,
+        type: "ATTACK",
+        description: "Deal 1 damage.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      bear_form: {
+        cardId: "bear_form",
+        name: "Bear Form",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 2 damage.",
+        effect: { type: "DAMAGE", value: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      }
+    },
+    starterDeckCardIds: ["delayed_stance", "wolf_form", "bear_form"],
+    transformRules: [{
+      ruleId: "T_PREPARED",
+      triggerCardId: "delayed_stance",
+      sourceCardId: "wolf_form",
+      targetCardId: "bear_form",
+      scope: "OWNER_HAND",
+      reversible: true,
+      revertTiming: "TURN_END"
+    }]
   };
 }
 

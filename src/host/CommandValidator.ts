@@ -49,12 +49,14 @@ export class CommandValidator {
         const payload = readPayload(message);
         const cardInstanceId = readString(payload, "cardInstanceId");
         const targetId = typeof payload.targetId === "string" ? payload.targetId : undefined;
+        const resourceCardInstanceIds = readOptionalStringArray(payload, "resourceCardInstanceIds");
         return {
           type: "PLAY_CARD",
           requestId,
           payload: {
             cardInstanceId,
-            targetId
+            targetId,
+            ...(resourceCardInstanceIds ? { resourceCardInstanceIds } : {})
           }
         };
       }
@@ -109,6 +111,25 @@ function readString(payload: Record<string, unknown>, key: string): string {
   }
 
   return value;
+}
+
+function readOptionalStringArray(payload: Record<string, unknown>, key: string): string[] | undefined {
+  const value = payload[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} must be an array.`);
+  }
+
+  return value.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new CommandError("INVALID_PAYLOAD", `Payload field ${key}[${index}] must be a non-empty string.`);
+    }
+
+    return entry;
+  });
 }
 
 function readAbilityScores(payload: Record<string, unknown>): AbilityScores {

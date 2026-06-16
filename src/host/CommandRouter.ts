@@ -20,7 +20,12 @@ export class CommandRouter {
       case "DRAW_CARD":
         return this.store.drawCard(playerId);
       case "PLAY_CARD":
-        return this.store.playCard(playerId, command.payload.cardInstanceId, command.payload.targetId);
+        return this.store.playCard(
+          playerId,
+          command.payload.cardInstanceId,
+          command.payload.targetId,
+          command.payload.resourceCardInstanceIds
+        );
       case "DISCARD_CARD":
         return this.store.discardCard(playerId, command.payload.cardInstanceId, command.payload.targetId);
       case "END_TURN":

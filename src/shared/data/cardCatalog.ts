@@ -3,6 +3,7 @@ import type {
   CardActionTagType,
   CardDefinition,
   CardEffectDefinition,
+  CardResourceCosts,
   CardTargeting,
   CardTargetScope,
   CardTargetSelection,
@@ -35,9 +36,14 @@ type CsvRecord = {
   values: Record<string, string>;
 };
 
-const CARD_TYPES = new Set(["ATTACK", "SKILL", "ITEM", "STATUS"]);
+const CARD_TYPES = new Set(["ATTACK", "SKILL", "MAGE", "ITEM", "STATUS"]);
 const EFFECT_TYPES = new Set(["NONE", "DAMAGE", "HEAL", "DRAW"]);
-const ACTION_TAG_TYPES = new Set(["BONUS_ACTION"]);
+const ACTION_TAG_TYPES = new Set([
+  "BONUS_ACTION",
+  "REACTION_ACTION",
+  "COUNTER_ACTION",
+  "READY_ACTION"
+]);
 const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
 const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
 const TRANSFORM_SCOPES = new Set(["OWNER_HAND"]);
@@ -390,6 +396,7 @@ function parseCardDefinitionRecord(
 ): CardDefinition {
   const effect = parseEffect(record, source);
   const actionTags = parseActionTagsRecord(record, source);
+  const resourceCosts = parseResourceCostsRecord(record, source);
 
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
@@ -400,6 +407,7 @@ function parseCardDefinitionRecord(
     effect,
     targeting: parseTargetingRecord(record, effect, source),
     consumable: parseOptionalBoolean(record.consumable, "consumable", source),
+    ...(resourceCosts ? { resourceCosts } : {}),
     ...(actionTags.length > 0 ? { actionTags } : {})
   };
 }
@@ -410,6 +418,7 @@ function parseCardDefinitionJsonRecord(
 ): CardDefinition {
   const effect = parseEffectJson(record.effect, `${source}.effect`);
   const actionTags = parseActionTagsJson(record.actionTags, `${source}.actionTags`);
+  const resourceCosts = parseResourceCostsJson(record, source);
 
   return {
     cardId: readRequiredString(record.cardId, "cardId", source),
@@ -420,8 +429,64 @@ function parseCardDefinitionJsonRecord(
     effect,
     targeting: parseTargetingJson(record.targeting, effect, `${source}.targeting`),
     consumable: parseOptionalBoolean(record.consumable, "consumable", source),
+    ...(resourceCosts ? { resourceCosts } : {}),
     ...(actionTags.length > 0 ? { actionTags } : {})
   };
+}
+
+function parseResourceCostsRecord(
+  record: Record<string, unknown>,
+  source: string
+): CardResourceCosts | undefined {
+  const consumeCardCount = parseOptionalInteger(
+    record.consumeCardCount ?? record.consumeCards,
+    "consumeCardCount",
+    source,
+    0
+  );
+  const hp = parseOptionalInteger(record.hpCost ?? record.hp, "hpCost", source, 0);
+
+  return createResourceCosts(consumeCardCount, hp);
+}
+
+function parseResourceCostsJson(
+  record: Record<string, unknown>,
+  source: string
+): CardResourceCosts | undefined {
+  const nestedCosts = record.resourceCosts === undefined || record.resourceCosts === null
+    ? {}
+    : readRecord(record.resourceCosts, `${source}.resourceCosts`);
+  const consumeCardCount = parseOptionalInteger(
+    nestedCosts.consumeCardCount ?? record.consumeCardCount ?? record.consumeCards,
+    "consumeCardCount",
+    source,
+    0
+  );
+  const hp = parseOptionalInteger(
+    nestedCosts.hp ?? record.hpCost ?? record.hp,
+    "hp",
+    source,
+    0
+  );
+
+  return createResourceCosts(consumeCardCount, hp);
+}
+
+function createResourceCosts(
+  consumeCardCount?: number,
+  hp?: number
+): CardResourceCosts | undefined {
+  const resourceCosts: CardResourceCosts = {};
+
+  if (consumeCardCount && consumeCardCount > 0) {
+    resourceCosts.consumeCardCount = consumeCardCount;
+  }
+
+  if (hp && hp > 0) {
+    resourceCosts.hp = hp;
+  }
+
+  return Object.keys(resourceCosts).length > 0 ? resourceCosts : undefined;
 }
 
 function parseEffect(record: Record<string, unknown>, source: string): CardEffectDefinition {
@@ -530,6 +595,24 @@ function createActionTag(type: CardActionTagType): CardActionTag {
         label: "附贈動作",
         trigger: "DISCARD"
       };
+    case "REACTION_ACTION":
+      return {
+        type,
+        label: "反應動作",
+        trigger: "DAMAGE_TARGETED"
+      };
+    case "COUNTER_ACTION":
+      return {
+        type,
+        label: "反制動作",
+        trigger: "SKILL_TARGETED"
+      };
+    case "READY_ACTION":
+      return {
+        type,
+        label: "準備動作",
+        trigger: "TURN_STARTED"
+      };
   }
 }
 
@@ -622,7 +705,7 @@ function parseCardType(value: unknown, source: string): CardType {
   const cardType = readRequiredString(value, "type", source).toUpperCase();
 
   if (!CARD_TYPES.has(cardType)) {
-    throw new Error(`${source} type must be ATTACK, SKILL, ITEM, or STATUS.`);
+    throw new Error(`${source} type must be ATTACK, SKILL, MAGE, ITEM, or STATUS.`);
   }
 
   return cardType as CardType;
@@ -644,13 +727,34 @@ function parseEffectType(
 
 function parseActionTagType(value: unknown, field: string, source: string): CardActionTagType {
   const rawType = readRequiredString(value, field, source).toUpperCase().replaceAll("-", "_").replaceAll(" ", "_");
-  const normalizedType = rawType === "附贈動作" || rawType === "BONUS" ? "BONUS_ACTION" : rawType;
+  const normalizedType = normalizeActionTagType(rawType);
 
   if (!ACTION_TAG_TYPES.has(normalizedType)) {
-    throw new Error(`${source} ${field} must be BONUS_ACTION.`);
+    throw new Error(`${source} ${field} must be BONUS_ACTION, REACTION_ACTION, COUNTER_ACTION, or READY_ACTION.`);
   }
 
   return normalizedType as CardActionTagType;
+}
+
+function normalizeActionTagType(value: string): string {
+  switch (value) {
+    case "附贈動作":
+    case "BONUS":
+      return "BONUS_ACTION";
+    case "反應動作":
+    case "REACTION":
+      return "REACTION_ACTION";
+    case "反制動作":
+    case "COUNTER":
+      return "COUNTER_ACTION";
+    case "準備動作":
+    case "READY":
+    case "PREPARE":
+    case "PREPARED_ACTION":
+      return "READY_ACTION";
+    default:
+      return value;
+  }
 }
 
 function parseTransformScope(
@@ -815,6 +919,23 @@ function parseInteger(value: unknown, field: string, source: string, min: number
   }
 
   return parsed;
+}
+
+function parseOptionalInteger(
+  value: unknown,
+  field: string,
+  source: string,
+  min: number
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (readOptionalString(value) === "") {
+    return undefined;
+  }
+
+  return parseInteger(value, field, source, min);
 }
 
 function parseCsvRecords(csvText: string, requiredHeaders: string[], source: string): CsvRecord[] {

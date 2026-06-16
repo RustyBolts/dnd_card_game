@@ -27,6 +27,7 @@ export type PlayerState = {
 export type GameZones = {
   deck: Record<string, CardInstance[]>;
   hand: Record<string, CardInstance[]>;
+  prepared: Record<string, CardInstance[]>;
   temporary: Record<string, CardInstance[]>;
   exhaust: Record<string, CardInstance[]>;
   board: CardInstance[];
@@ -53,6 +54,8 @@ export type VisibleGameZones = {
   deckCounts: Record<string, number>;
   hand: Record<string, VisibleCardInstance[]>;
   handCounts: Record<string, number>;
+  prepared: Record<string, VisibleCardInstance[]>;
+  preparedCounts: Record<string, number>;
   temporary: Record<string, VisibleCardInstance[]>;
   temporaryCounts: Record<string, number>;
   exhaust: Record<string, VisibleCardInstance[]>;

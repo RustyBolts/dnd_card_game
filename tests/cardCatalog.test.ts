@@ -85,12 +85,51 @@ describe("card catalog data source", () => {
     expect(jsonCatalog.cardDefinitions.scroll_burst.consumable).toBe(true);
   });
 
+  it("parses optional resource costs from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumeCardCount,hpCost,enabled\n" +
+        "blood_rite,Blood Rite,1,SKILL,Pay HP and consume cards.,DRAW,,1,NONE,SELF,false,2,3,true\n",
+      starterDeckCsv: "cardId,count\nblood_rite,1\n",
+      version: "resource-costs-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "resource-costs-json",
+      cardDefinitions: {
+        blood_rite: {
+          cardId: "blood_rite",
+          name: "Blood Rite",
+          cost: 1,
+          type: "SKILL",
+          description: "Pay HP and consume cards.",
+          effect: { type: "DRAW", count: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+          resourceCosts: {
+            consumeCardCount: 2,
+            hp: 3
+          }
+        }
+      },
+      starterDeckCardIds: ["blood_rite"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.blood_rite.resourceCosts).toEqual({
+      consumeCardCount: 2,
+      hp: 3
+    });
+    expect(jsonCatalog.cardDefinitions.blood_rite.resourceCosts).toEqual({
+      consumeCardCount: 2,
+      hp: 3
+    });
+  });
+
   it("parses action tags from CSV and JSON catalogs", () => {
     const csvCatalog = parseCardCatalogFromCsv({
       cardsCsv:
         "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,actionTags,enabled\n" +
-        "quick_shot,Quick Shot,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,附贈動作,true\n",
-      starterDeckCsv: "cardId,count\nquick_shot,1\n",
+        "quick_shot,Quick Shot,2,ATTACK,Deal 2 damage.,DAMAGE,2,,SINGLE,ENEMY,true,附贈動作,true\n" +
+        "riposte,Riposte,1,ATTACK,Deal 1 damage.,DAMAGE,1,,SINGLE,ENEMY,true,反應動作,true\n",
+      starterDeckCsv: "cardId,count\nquick_shot,1\nriposte,1\n",
       version: "action-tags-csv"
     });
     const jsonCatalog = parseCardCatalogJson({
@@ -104,7 +143,7 @@ describe("card catalog data source", () => {
           description: "Deal 2 damage.",
           effect: { type: "DAMAGE", value: 2 },
           targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
-          actionTags: ["BONUS_ACTION"]
+          actionTags: ["BONUS_ACTION", "COUNTER_ACTION", "READY_ACTION"]
         }
       },
       starterDeckCardIds: ["quick_shot"]
@@ -115,11 +154,28 @@ describe("card catalog data source", () => {
       label: "附贈動作",
       trigger: "DISCARD"
     }]);
-    expect(jsonCatalog.cardDefinitions.quick_shot.actionTags).toEqual([{
-      type: "BONUS_ACTION",
-      label: "附贈動作",
-      trigger: "DISCARD"
+    expect(csvCatalog.cardDefinitions.riposte.actionTags).toEqual([{
+      type: "REACTION_ACTION",
+      label: "反應動作",
+      trigger: "DAMAGE_TARGETED"
     }]);
+    expect(jsonCatalog.cardDefinitions.quick_shot.actionTags).toEqual([
+      {
+        type: "BONUS_ACTION",
+        label: "附贈動作",
+        trigger: "DISCARD"
+      },
+      {
+        type: "COUNTER_ACTION",
+        label: "反制動作",
+        trigger: "SKILL_TARGETED"
+      },
+      {
+        type: "READY_ACTION",
+        label: "準備動作",
+        trigger: "TURN_STARTED"
+      }
+    ]);
   });
 
   it("parses external race definitions from CSV data", () => {

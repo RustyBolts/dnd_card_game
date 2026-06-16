@@ -140,10 +140,13 @@ Command 是 Client 傳給 Host 的玩家意圖。
   "requestId": "req_004",
   "payload": {
     "cardInstanceId": "card_inst_001",
-    "targetId": "p2"
+    "targetId": "p2",
+    "resourceCardInstanceIds": ["card_inst_010", "card_inst_011"]
   }
 }
 ```
+
+`resourceCardInstanceIds` 是可選欄位；只有卡牌定義有額外消耗手牌代價時才需要提供。Host 會先驗證指定張數、卡牌仍在手牌中且不是正在打出的牌，全部通過後才會移動任何牌或扣 HP。
 
 ### DISCARD_CARD
 
@@ -258,12 +261,49 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 
 目前 `BONUS_ACTION` 會在棄牌動作發生時觸發，並以 0 能量消耗解析該卡效果。前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張整理手牌；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
 
+`REACTION_ACTION`、`COUNTER_ACTION` 會先以 `CARD_PLAYED.destinationZone = "PREPARED"` 進入準備牌堆。反應動作在其他玩家用 `DAMAGE` 指定自己並造成傷害時觸發，預設目標是攻擊者；反制動作在其他玩家用 `SKILL` 或 `MAGE` 指定自己時觸發，預設目標是施放者。`READY_ACTION` 可直接出牌並解析效果；只有被作為資源消耗，或同時有 `consumable=true` 導致出牌等同被消耗時，才會進入準備牌堆，並在自己的回合開始時觸發，預設目標是自己。觸發後 `CARD_ACTION_TRIGGERED.payload.destinationZone` 會指出卡牌移入 `TEMPORARY` 或 `EXHAUST`。
+
+### CARD_CONSUMED
+
+```json
+{
+  "type": "CARD_CONSUMED",
+  "seq": 6,
+  "payload": {
+    "playerId": "p1",
+    "cardInstanceId": "card_inst_010",
+    "cardId": "guarded_recovery",
+    "sourceCardInstanceId": "card_inst_001",
+    "destinationZone": "PREPARED"
+  }
+}
+```
+
+額外資源消耗的普通卡會移入 `EXHAUST`；帶有 `READY_ACTION` 的卡被消耗時會移入 `PREPARED`。
+
+### HP_PAID
+
+```json
+{
+  "type": "HP_PAID",
+  "seq": 7,
+  "payload": {
+    "playerId": "p1",
+    "sourceCardInstanceId": "card_inst_001",
+    "amount": 3,
+    "hpAfter": 12
+  }
+}
+```
+
+HP 代價支付後必須仍大於 0，Host 會拒絕會讓玩家自殺的出牌。
+
 ### DAMAGE_APPLIED
 
 ```json
 {
   "type": "DAMAGE_APPLIED",
-  "seq": 6,
+  "seq": 8,
   "payload": {
     "sourceId": "card_inst_001",
     "targetId": "p2",
@@ -278,7 +318,7 @@ Event 是 Host 廣播給所有 Client 的遊戲事實。
 ```json
 {
   "type": "TURN_STARTED",
-  "seq": 7,
+  "seq": 9,
   "payload": {
     "playerId": "p2",
     "turn": 2
@@ -312,6 +352,9 @@ type GameState = {
   zones: {
     deck: Record<string, CardInstance[]>
     hand: Record<string, CardInstance[]>
+    prepared: Record<string, CardInstance[]>
+    temporary: Record<string, CardInstance[]>
+    exhaust: Record<string, CardInstance[]>
     board: CardInstance[]
     graveyard: CardInstance[]
     exile: CardInstance[]
@@ -345,8 +388,13 @@ type CardDefinition = {
   cardId: string
   name: string
   cost: number
-  type: 'ATTACK' | 'SKILL' | 'ITEM' | 'STATUS'
+  type: 'ATTACK' | 'SKILL' | 'MAGE' | 'ITEM' | 'STATUS'
   effect: CardEffectDefinition
+  consumable?: boolean
+  resourceCosts?: {
+    consumeCardCount?: number
+    hp?: number
+  }
 }
 ```
 
@@ -359,7 +407,7 @@ type CardInstance = {
   instanceId: string
   cardId: string
   ownerId: string
-  zone: 'DECK' | 'HAND' | 'BOARD' | 'GRAVEYARD' | 'EXILE'
+  zone: 'DECK' | 'HAND' | 'BOARD' | 'PREPARED' | 'TEMPORARY' | 'EXHAUST' | 'GRAVEYARD' | 'EXILE'
 }
 ```
 

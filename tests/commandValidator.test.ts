@@ -4,6 +4,7 @@ import { CommandError } from "../src/host/CommandError.js";
 import { createStartedGame } from "./testUtils.js";
 import { createDefaultCharacterConfig } from "../src/shared/rules/characterRules.js";
 import { GameStateStore } from "../src/host/GameStateStore.js";
+import { CommandValidator } from "../src/host/CommandValidator.js";
 
 describe("host command validation", () => {
   it("creates a character with race-based HP and cached ability modifiers", () => {
@@ -106,6 +107,29 @@ describe("host command validation", () => {
 
     expect(() => store.playCard(playerId, card.instanceId, "p1")).toThrow(CommandError);
     expect(() => store.playCard(playerId, card.instanceId, "p1")).toThrow("Only the current player");
+  });
+
+  it("accepts consumed card resource ids on play card commands", () => {
+    const validator = new CommandValidator();
+    const command = validator.parse({
+      type: "PLAY_CARD",
+      requestId: "req_resource",
+      payload: {
+        cardInstanceId: "card_source",
+        targetId: "p2",
+        resourceCardInstanceIds: ["card_a", "card_b"]
+      }
+    });
+
+    expect(command).toEqual({
+      type: "PLAY_CARD",
+      requestId: "req_resource",
+      payload: {
+        cardInstanceId: "card_source",
+        targetId: "p2",
+        resourceCardInstanceIds: ["card_a", "card_b"]
+      }
+    });
   });
 
   it("hides opponent hand details in player snapshots", () => {

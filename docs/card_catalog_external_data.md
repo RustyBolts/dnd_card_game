@@ -37,13 +37,13 @@ Google Spreadsheet 建議建立四個工作表：
 ### `cards` 欄位
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,actionTags,enabled
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
 ```
 
 - `cardId`：穩定唯一 ID，牌組和遊戲狀態都用這個 ID。
 - `name`：顯示名稱。
 - `cost`：整數，必須 >= 0。
-- `type`：`ATTACK`、`SKILL`、`ITEM` 或 `STATUS`。
+- `type`：`ATTACK`、`SKILL`、`MAGE`、`ITEM` 或 `STATUS`。
 - `description`：顯示文字。
 - `effectType`：`NONE`、`DAMAGE`、`HEAL` 或 `DRAW`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。
 - `effectValue`：`DAMAGE`、`HEAL` 使用的數值。
@@ -52,7 +52,9 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 - `targetScope`：`SELF`、`ALLY`、`ENEMY` 或 `ANY`。
 - `targetRequired`：`SINGLE` 目標使用；`true` 表示 command 必須帶目標，`false` 表示玩家不需要手動指定目標。`GROUP` 目標會依 `targetScope` 自動解析全體目標，程式會將 `targetRequired` 視為 `false`。
 - `consumable`：可選。`true` 表示卡牌打出後進入消耗牌堆，不會從暫存牌堆重洗回牌庫。空白或未提供欄位時視為普通牌。
-- `actionTags`：可選。用 `|`、`;` 或 `、` 分隔多個標籤；目前支援 `BONUS_ACTION` 或中文 `附贈動作`。
+- `consumeCardCount`：可選。出牌時需要額外指定並消耗的手牌張數；被消耗的普通牌進消耗牌堆，被消耗的 `READY_ACTION` / `準備動作` 牌進準備牌堆。
+- `hpCost`：可選。出牌時額外支付的 HP；Host/Worker 會拒絕讓玩家支付後 HP 變成 0 或以下。
+- `actionTags`：可選。用 `|`、`;` 或 `、` 分隔多個標籤；目前支援 `BONUS_ACTION` / `附贈動作`、`REACTION_ACTION` / `反應動作`、`COUNTER_ACTION` / `反制動作`、`READY_ACTION` / `準備動作`。
 - `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
 
 目標欄位的建議用法：
@@ -68,14 +70,20 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelec
 
 `BONUS_ACTION` / `附贈動作` 表示這張卡可直接出牌，也可以在棄牌動作發生時作為附贈動作觸發。附贈動作觸發時，Host/Worker 會先驗證目標，再將卡牌從手牌移到暫存牌堆，發出 `CARD_ACTION_TRIGGERED`，並以 0 能量消耗解析該卡原本的 `effect`。若該卡需要指定目標，`DISCARD_CARD` command 必須帶 `targetId`。目前前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張棄牌並選目標；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
 
+`REACTION_ACTION` / `反應動作`、`COUNTER_ACTION` / `反制動作` 會在打出後先移入準備牌堆，不立即解析效果。反應動作在其他玩家以 `DAMAGE` 指定自己並造成傷害時觸發，該攻擊者會成為預設目標；反制動作在其他玩家以 `SKILL` 或 `MAGE` 指定自己時觸發，施放者會成為預設目標。`READY_ACTION` / `準備動作` 卡牌可直接出牌並正常解析；只有當它被作為額外資源消耗，或這張牌本身同時有 `consumable=true` 而出牌等同被消耗時，才會移入準備牌堆，並在回到自己的回合開始時觸發，自己會成為預設目標。觸發生效後，`consumable=true` 的卡移入消耗牌堆，其他卡移入暫存牌堆。
+
 範例：
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,actionTags,enabled
-quick_shot,快速射擊,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,,附贈動作,true
+cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
+quick_shot,快速射擊,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,,,,附贈動作,true
+riposte,反擊刺擊,1,ATTACK,受到傷害時對攻擊者造成 1 點傷害。,DAMAGE,1,,SINGLE,ENEMY,true,true,,,反應動作,true
+counter_jab,反制打擊,1,SKILL,受到技能或魔法指定時對施放者造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,,,,反制動作,true
+guarded_recovery,戒備恢復,1,SKILL,直接恢復 3 點 HP；被消耗時改為下回合開始恢復。,HEAL,3,,NONE,SELF,false,,,,準備動作,true
+blood_rite,血祭儀式,0,SKILL,支付 3 HP 並消耗 2 張手牌。,DRAW,,1,NONE,SELF,false,,2,3,,true
 ```
 
-為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有目標欄位、沒有 `consumable` 欄位或沒有 `actionTags` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL` 與 `DRAW` 會推導成作用於自己且不需指定目標；未提供 `consumable` 時會視為普通牌，未提供 `actionTags` 時代表沒有微操作標籤。
+為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有目標欄位、沒有 `consumable` 欄位、沒有 `consumeCardCount` / `hpCost` 欄位或沒有 `actionTags` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL` 與 `DRAW` 會推導成作用於自己且不需指定目標；未提供 `consumable` 時會視為普通牌，未提供資源代價時只消耗能量，未提供 `actionTags` 時代表沒有微操作標籤。
 
 ### `starter_deck` 欄位
 
@@ -93,14 +101,14 @@ ruleId,triggerCardId,sourceCardId,targetCardId,scope,reversible,revertTiming
 ```
 
 - `ruleId`：穩定唯一 ID，用於事件、測試與除錯。
-- `triggerCardId`：打出哪張卡時觸發規則。
+- `triggerCardId`：哪張卡生效時觸發規則。一般直接出牌會在出牌效果解析後檢查；準備牌堆中的卡會在準備動作實際觸發生效後檢查，不會在單純移入準備牌堆時檢查。
 - `sourceCardId`：被轉換前的卡牌 ID。
 - `targetCardId`：轉換後的卡牌 ID，必須與 `sourceCardId` 不同。
 - `scope`：目前支援 `hand` 或 `OWNER_HAND`，代表觸發者自己的手牌。
 - `reversible`：`true` 表示此轉換會依 `revertTiming` 還原；`false` 表示不會自動還原。
 - `revertTiming`：目前支援 `turn_end` 或 `NEVER`。`reversible=false` 時必須是 `NEVER` 或空白。
 
-玩家打出 `triggerCardId` 後，Host/Worker 會掃描規則 scope 中符合 `sourceCardId` 的 card instance，保留同一個 `instanceId` 並把 `cardId` 改成 `targetCardId`。若 `reversible=true` 且 `revertTiming=turn_end`，該 instance 在觸發者回合結束時仍在手牌中才會還原成 `sourceCardId`；若已經被打出或丟棄，則不再還原。
+`triggerCardId` 生效後，Host/Worker 會掃描規則 scope 中符合 `sourceCardId` 的 card instance，保留同一個 `instanceId` 並把 `cardId` 改成 `targetCardId`。若 `reversible=true` 且 `revertTiming=turn_end`，該 instance 在觸發者回合結束時仍在手牌中才會還原成 `sourceCardId`；若已經被打出或丟棄，則不再還原。
 
 `CARD_TRANSFORMED` event 只會送給該手牌的持有者。其他玩家不會收到這類事件，避免從事件數量或 ruleId 反推出對手手牌內容。
 

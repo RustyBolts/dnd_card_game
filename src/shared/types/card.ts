@@ -1,6 +1,6 @@
-export type CardType = "ATTACK" | "SKILL" | "ITEM" | "STATUS";
+export type CardType = "ATTACK" | "SKILL" | "MAGE" | "ITEM" | "STATUS";
 
-export type CardZone = "DECK" | "HAND" | "BOARD" | "TEMPORARY" | "EXHAUST" | "GRAVEYARD" | "EXILE";
+export type CardZone = "DECK" | "HAND" | "BOARD" | "PREPARED" | "TEMPORARY" | "EXHAUST" | "GRAVEYARD" | "EXILE";
 
 export type CardEffectDefinition =
   | { type: "NONE" }
@@ -18,14 +18,28 @@ export type CardTargeting = {
   requiresTarget: boolean;
 };
 
-export type CardActionTagType = "BONUS_ACTION";
+export type CardActionTagType =
+  | "BONUS_ACTION"
+  | "REACTION_ACTION"
+  | "COUNTER_ACTION"
+  | "READY_ACTION";
 
-export type CardActionTrigger = "DISCARD";
+export type CardActionTrigger =
+  | "DISCARD"
+  | "DAMAGE_TARGETED"
+  | "SKILL_TARGETED"
+  | "MAGE_TARGETED"
+  | "TURN_STARTED";
 
 export type CardActionTag = {
   type: CardActionTagType;
   label: string;
   trigger: CardActionTrigger;
+};
+
+export type CardResourceCosts = {
+  consumeCardCount?: number;
+  hp?: number;
 };
 
 export type CardDefinition = {
@@ -37,6 +51,7 @@ export type CardDefinition = {
   effect: CardEffectDefinition;
   targeting: CardTargeting;
   consumable?: boolean;
+  resourceCosts?: CardResourceCosts;
   actionTags?: CardActionTag[];
 };
 
@@ -55,6 +70,7 @@ export type VisibleCardInstance = CardInstance & {
   effect?: CardEffectDefinition;
   targeting?: CardTargeting;
   consumable?: boolean;
+  resourceCosts?: CardResourceCosts;
   actionTags?: CardActionTag[];
   hidden?: boolean;
 };

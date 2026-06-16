@@ -9,6 +9,8 @@ export class SnapshotService {
     const hand: VisibleGameState["zones"]["hand"] = {};
     const handCounts: VisibleGameState["zones"]["handCounts"] = {};
     const deckCounts: VisibleGameState["zones"]["deckCounts"] = {};
+    const prepared: VisibleGameState["zones"]["prepared"] = {};
+    const preparedCounts: VisibleGameState["zones"]["preparedCounts"] = {};
     const temporary: VisibleGameState["zones"]["temporary"] = {};
     const temporaryCounts: VisibleGameState["zones"]["temporaryCounts"] = {};
     const exhaust: VisibleGameState["zones"]["exhaust"] = {};
@@ -18,6 +20,7 @@ export class SnapshotService {
     for (const playerId of state.playerOrder) {
       deckCounts[playerId] = state.zones.deck[playerId]?.length ?? 0;
       handCounts[playerId] = state.zones.hand[playerId]?.length ?? 0;
+      preparedCounts[playerId] = state.zones.prepared[playerId]?.length ?? 0;
       temporaryCounts[playerId] = state.zones.temporary[playerId]?.length ?? 0;
       exhaustCounts[playerId] = state.zones.exhaust[playerId]?.length ?? 0;
       deck[playerId] = playerId === viewerId
@@ -26,6 +29,7 @@ export class SnapshotService {
       hand[playerId] = (state.zones.hand[playerId] ?? []).map((card) =>
         playerId === viewerId ? this.toVisibleCard(card) : this.toHiddenCard(card)
       );
+      prepared[playerId] = (state.zones.prepared[playerId] ?? []).map((card) => this.toVisibleCard(card));
       temporary[playerId] = (state.zones.temporary[playerId] ?? []).map((card) => this.toVisibleCard(card));
       exhaust[playerId] = (state.zones.exhaust[playerId] ?? []).map((card) => this.toVisibleCard(card));
       drawPreview[playerId] = playerId === viewerId
@@ -42,6 +46,8 @@ export class SnapshotService {
         deckCounts,
         hand,
         handCounts,
+        prepared,
+        preparedCounts,
         temporary,
         temporaryCounts,
         exhaust,
@@ -65,6 +71,7 @@ export class SnapshotService {
       effect: definition?.effect,
       targeting: definition?.targeting,
       consumable: definition?.consumable,
+      resourceCosts: definition?.resourceCosts,
       actionTags: definition?.actionTags
     };
   }

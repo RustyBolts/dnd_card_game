@@ -66,6 +66,17 @@ const pileDialog = byId<HTMLDialogElement>("pile-dialog");
 const pileDialogTitle = byId<HTMLElement>("pile-dialog-title");
 const pileDialogBody = byId<HTMLElement>("pile-dialog-body");
 const pileDialogClose = byId<HTMLButtonElement>("pile-dialog-close");
+const playConfirmDialog = byId<HTMLDialogElement>("play-confirm-dialog");
+const playConfirmTitle = byId<HTMLElement>("play-confirm-title");
+const playConfirmBody = byId<HTMLElement>("play-confirm-body");
+const playConfirmStatus = byId<HTMLElement>("play-confirm-status");
+const playConfirmCancel = byId<HTMLButtonElement>("play-confirm-cancel");
+const playConfirmSubmit = byId<HTMLButtonElement>("play-confirm-submit");
+
+type PendingPlayAction = {
+  cardInstanceId: string;
+  targetId?: string;
+};
 
 let socket: WebSocket | null = null;
 let playerId: string | null = null;
@@ -80,6 +91,7 @@ let selectedRaceId = Object.keys(DEFAULT_RACES)[0] ?? "human";
 let raceCatalogLoaded = false;
 let raceCatalogLoading = false;
 let raceCatalogStatus = "Using local default races until a Worker catalog is loaded.";
+let pendingPlayAction: PendingPlayAction | null = null;
 let abilityScores: AbilityScores = {
   strength: 12,
   dexterity: 12,
@@ -142,6 +154,27 @@ readyButton.addEventListener("click", () => {
 drawButton.addEventListener("click", () => send({ type: "DRAW_CARD", requestId: requestId() }));
 endButton.addEventListener("click", () => send({ type: "END_TURN", requestId: requestId() }));
 pileDialogClose.addEventListener("click", () => pileDialog.close());
+playConfirmCancel.addEventListener("click", () => playConfirmDialog.close());
+playConfirmDialog.addEventListener("close", () => {
+  pendingPlayAction = null;
+});
+playConfirmSubmit.addEventListener("click", () => {
+  confirmPendingPlay();
+});
+playConfirmBody.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+    return;
+  }
+
+  const card = pendingPlayAction ? findVisibleHandCard(pendingPlayAction.cardInstanceId) : undefined;
+  const consumeCardCount = card?.resourceCosts?.consumeCardCount ?? 0;
+  const selectedIds = selectedPendingResourceCardIds();
+  if (selectedIds.length > consumeCardCount) {
+    target.checked = false;
+  }
+  updatePlayConfirmState();
+});
 
 render();
 void refreshCatalogFromWorkerUrl();
@@ -378,7 +411,7 @@ function render(): void {
           ${characterRows}
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
-          <div>暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
+          <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
         </div>
       `;
     })
@@ -419,6 +452,11 @@ function renderPileControls(): void {
       key: "deck",
       label: "牌庫",
       count: localState.zones.deckCounts[playerId] ?? 0
+    },
+    {
+      key: "prepared",
+      label: "準備牌堆",
+      count: localState.zones.preparedCounts[playerId] ?? 0
     },
     {
       key: "temporary",
@@ -686,8 +724,12 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
 function renderCard(card: VisibleCardInstance): string {
   const visibleCard = hydrateVisibleCard(card);
   const targeting = getCardTargeting(visibleCard);
-  const targetControl = renderTargetControl(visibleCard, targeting);
-  const isPlayDisabled = !canTakeMainAction() || (requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0);
+  const targetControl = playsIntoPreparedPile(visibleCard) ? "" : renderTargetControl(visibleCard, targeting);
+  const isPlayDisabled =
+    !canTakeMainAction() ||
+    (requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0) ||
+    !hasEnoughConsumableResourceCards(visibleCard) ||
+    !canPayHpResourceCost(visibleCard);
   const showDiscardButton = canDiscardFromHand();
   const triggersBonusDiscard = canTriggerBonusDiscard(visibleCard);
   const isDiscardTargetBlocked = triggersBonusDiscard && targeting.requiresTarget && getPotentialTargetIds(targeting).length === 0;
@@ -703,6 +745,7 @@ function renderCard(card: VisibleCardInstance): string {
       <div class="card-meta">
         <span>${targetingLabel(targeting)}</span>
         ${visibleCard.consumable ? `<span>消耗</span>` : ""}
+        ${renderResourceCostTags(visibleCard)}
         ${renderActionTags(visibleCard)}
       </div>
       ${targetControl}
@@ -730,8 +773,25 @@ function hydrateVisibleCard(card: VisibleCardInstance): VisibleCardInstance {
     effect: card.effect ?? definition.effect,
     targeting: card.targeting ?? definition.targeting,
     consumable: card.consumable ?? definition.consumable,
+    resourceCosts: card.resourceCosts ?? definition.resourceCosts,
     actionTags: card.actionTags ?? definition.actionTags
   };
+}
+
+function renderResourceCostTags(card: VisibleCardInstance): string {
+  const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
+  const hpCost = card.resourceCosts?.hp ?? 0;
+  const tags: string[] = [];
+
+  if (consumeCardCount > 0) {
+    tags.push(`<span>消耗${consumeCardCount}張</span>`);
+  }
+
+  if (hpCost > 0) {
+    tags.push(`<span>HP-${hpCost}</span>`);
+  }
+
+  return tags.join("");
 }
 
 function renderActionTags(card: VisibleCardInstance): string {
@@ -789,6 +849,14 @@ function getPileView(pileKey: string): { label: string; count: number; cards: Vi
       label: "暫存牌堆",
       count: localState.zones.temporaryCounts[playerId] ?? 0,
       cards: localState.zones.temporary[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "prepared") {
+    return {
+      label: "準備牌堆",
+      count: localState.zones.preparedCounts[playerId] ?? 0,
+      cards: localState.zones.prepared[playerId] ?? []
     };
   }
 
@@ -891,19 +959,29 @@ handEl.addEventListener("click", (event) => {
     const selectedTargetId = selectedTargetForCard(playId);
     const targeting = card ? getCardTargeting(card) : null;
 
-    if (targeting?.requiresTarget && !selectedTargetId) {
+    if (card && !playsIntoPreparedPile(card) && targeting?.requiresTarget && !selectedTargetId) {
       addLog({ type: "LOCAL_NOTICE", payload: { message: "No valid target selected." } });
       return;
     }
 
-    send({
-      type: "PLAY_CARD",
-      requestId: requestId(),
-      payload: {
-        cardInstanceId: playId,
-        targetId: selectedTargetId
-      }
-    });
+    if (!card) {
+      return;
+    }
+
+    if (!canPayHpResourceCost(card)) {
+      addLog({
+        type: "LOCAL_NOTICE",
+        payload: { message: "Not enough HP to pay this card without falling to 0 HP." }
+      });
+      return;
+    }
+
+    if (requiresPlayConfirmation(card)) {
+      openPlayConfirmDialog(card, selectedTargetId);
+      return;
+    }
+
+    sendPlayCardCommand(playId, selectedTargetId);
     return;
   }
 
@@ -940,6 +1018,22 @@ function send(command: unknown): void {
   socket.send(JSON.stringify(command));
 }
 
+function sendPlayCardCommand(
+  cardInstanceId: string,
+  targetId?: string,
+  resourceCardInstanceIds: string[] = []
+): void {
+  send({
+    type: "PLAY_CARD",
+    requestId: requestId(),
+    payload: {
+      cardInstanceId,
+      targetId,
+      ...(resourceCardInstanceIds.length > 0 ? { resourceCardInstanceIds } : {})
+    }
+  });
+}
+
 function findVisibleHandCard(cardInstanceId: string): VisibleCardInstance | undefined {
   if (!localState || !playerId) {
     return undefined;
@@ -955,7 +1049,154 @@ function selectedTargetForCard(cardInstanceId: string): string | undefined {
   return select?.value || undefined;
 }
 
+function requiresPlayConfirmation(card: VisibleCardInstance): boolean {
+  return (card.resourceCosts?.consumeCardCount ?? 0) > 0 || (card.resourceCosts?.hp ?? 0) > 0;
+}
+
+function openPlayConfirmDialog(card: VisibleCardInstance, targetId?: string): void {
+  pendingPlayAction = {
+    cardInstanceId: card.instanceId,
+    targetId
+  };
+  playConfirmTitle.textContent = `確認出牌：${card.name ?? card.cardId}`;
+  playConfirmBody.innerHTML = renderPlayConfirmBody(card, targetId);
+  updatePlayConfirmState();
+  playConfirmDialog.showModal();
+}
+
+function renderPlayConfirmBody(card: VisibleCardInstance, targetId?: string): string {
+  const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
+  const hpCost = card.resourceCosts?.hp ?? 0;
+  const candidates = resourceCardCandidates(card.instanceId);
+  const localPlayer = getLocalPlayer();
+  const hpAfter = localPlayer ? localPlayer.hp - hpCost : null;
+  const targetLabel = targetId
+    ? playerLabel(targetId)
+    : getCardTargeting(card).selection === "GROUP"
+      ? getPotentialTargetIds(getCardTargeting(card)).map((id) => playerLabel(id)).join(", ")
+      : "self";
+
+  return `
+    <section class="play-confirm-card">
+      <strong>${escapeHtml(card.name ?? card.cardId)}</strong>
+      <span>${escapeHtml(card.type ?? "")} · Cost ${card.cost ?? 0} · Target ${escapeHtml(targetLabel)}</span>
+      <p>${escapeHtml(card.description ?? "")}</p>
+    </section>
+    <section class="play-confirm-costs">
+      <div>Energy ${card.cost ?? 0}</div>
+      ${hpCost > 0 ? `<div>HP ${hpCost}${hpAfter === null ? "" : ` (${localPlayer!.hp} -> ${hpAfter})`}</div>` : ""}
+      ${consumeCardCount > 0 ? `<div>Cards ${consumeCardCount}</div>` : ""}
+    </section>
+    ${consumeCardCount > 0 ? `
+      <section class="play-confirm-resources">
+        <h3>消耗手牌</h3>
+        <div class="resource-options">
+          ${candidates.map((candidate) => {
+            const visibleCandidate = hydrateVisibleCard(candidate);
+            const destinationLabel = isReadyActionCard(visibleCandidate) ? "準備牌堆" : "消耗牌堆";
+            return `
+              <label>
+                <input type="checkbox" data-resource-card value="${escapeHtml(candidate.instanceId)}" />
+                <span>
+                  <strong>${escapeHtml(visibleCandidate.name ?? visibleCandidate.cardId)}</strong>
+                  <small>${escapeHtml(destinationLabel)}</small>
+                </span>
+              </label>
+            `;
+          }).join("")}
+        </div>
+      </section>
+    ` : ""}
+  `;
+}
+
+function selectedPendingResourceCardIds(): string[] {
+  return Array.from(playConfirmBody.querySelectorAll<HTMLInputElement>("input[data-resource-card]"))
+    .filter((candidate) => candidate.checked)
+    .map((candidate) => candidate.value);
+}
+
+function updatePlayConfirmState(): void {
+  const card = pendingPlayAction ? findVisibleHandCard(pendingPlayAction.cardInstanceId) : undefined;
+  if (!card) {
+    playConfirmStatus.textContent = "Card is no longer available.";
+    playConfirmSubmit.disabled = true;
+    return;
+  }
+
+  const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
+  const selectedCount = selectedPendingResourceCardIds().length;
+  const hpCost = card.resourceCosts?.hp ?? 0;
+
+  if (consumeCardCount > 0 && selectedCount !== consumeCardCount) {
+    playConfirmStatus.textContent = `已選 ${selectedCount}/${consumeCardCount} 張`;
+    playConfirmSubmit.disabled = true;
+    return;
+  }
+
+  if (hpCost > 0 && !canPayHpResourceCost(card)) {
+    playConfirmStatus.textContent = "HP 不足";
+    playConfirmSubmit.disabled = true;
+    return;
+  }
+
+  playConfirmStatus.textContent = consumeCardCount > 0
+    ? `已選 ${selectedCount}/${consumeCardCount} 張`
+    : "可支付";
+  playConfirmSubmit.disabled = false;
+}
+
+function confirmPendingPlay(): void {
+  if (!pendingPlayAction) {
+    return;
+  }
+
+  const card = findVisibleHandCard(pendingPlayAction.cardInstanceId);
+  if (!card) {
+    updatePlayConfirmState();
+    return;
+  }
+
+  const selectedResourceCardIds = selectedPendingResourceCardIds();
+  const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
+  if (selectedResourceCardIds.length !== consumeCardCount || !canPayHpResourceCost(card)) {
+    updatePlayConfirmState();
+    return;
+  }
+
+  sendPlayCardCommand(card.instanceId, pendingPlayAction.targetId, selectedResourceCardIds);
+  playConfirmDialog.close();
+}
+
+function resourceCardCandidates(cardInstanceId: string): VisibleCardInstance[] {
+  if (!localState || !playerId) {
+    return [];
+  }
+
+  return (localState.zones.hand[playerId] ?? [])
+    .filter((candidate) => candidate.instanceId !== cardInstanceId);
+}
+
+function hasEnoughConsumableResourceCards(card: VisibleCardInstance): boolean {
+  const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
+  return consumeCardCount <= 0 || resourceCardCandidates(card.instanceId).length >= consumeCardCount;
+}
+
+function canPayHpResourceCost(card: VisibleCardInstance): boolean {
+  const hpCost = card.resourceCosts?.hp ?? 0;
+  const localPlayer = getLocalPlayer();
+  return hpCost <= 0 || Boolean(localPlayer && localPlayer.hp > hpCost);
+}
+
+function isReadyActionCard(card: VisibleCardInstance): boolean {
+  return Boolean(card.actionTags?.some((tag) => tag.type === "READY_ACTION"));
+}
+
 function requiresEffectTarget(card: VisibleCardInstance): boolean {
+  if (playsIntoPreparedPile(card)) {
+    return false;
+  }
+
   return card.effect?.type === "DAMAGE" || card.effect?.type === "HEAL";
 }
 
@@ -963,6 +1204,14 @@ function canTriggerBonusDiscard(card: VisibleCardInstance): boolean {
   return canDiscardFromHand() && Boolean(
     card.actionTags?.some((tag) => tag.type === "BONUS_ACTION" && tag.trigger === "DISCARD")
   );
+}
+
+function playsIntoPreparedPile(card: VisibleCardInstance): boolean {
+  return Boolean(card.actionTags?.some((tag) =>
+    tag.type === "REACTION_ACTION" ||
+    tag.type === "COUNTER_ACTION" ||
+    (tag.type === "READY_ACTION" && card.consumable)
+  ));
 }
 
 function playerLabel(id: string): string {

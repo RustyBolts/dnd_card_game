@@ -54,6 +54,7 @@ export type PlayCardCommand = {
   payload: {
     cardInstanceId: string;
     targetId?: string;
+    resourceCardInstanceIds?: string[];
   };
 };
 
@@ -168,6 +169,29 @@ export type CardDiscardedEvent = {
   };
 };
 
+export type CardConsumedEvent = {
+  type: "CARD_CONSUMED";
+  seq: number;
+  payload: {
+    playerId: string;
+    cardInstanceId: string;
+    cardId: string;
+    sourceCardInstanceId: string;
+    destinationZone: CardZone;
+  };
+};
+
+export type HpPaidEvent = {
+  type: "HP_PAID";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceCardInstanceId: string;
+    amount: number;
+    hpAfter: number;
+  };
+};
+
 export type CardActionTriggeredEvent = {
   type: "CARD_ACTION_TRIGGERED";
   seq: number;
@@ -177,6 +201,7 @@ export type CardActionTriggeredEvent = {
     cardId: string;
     actionTag: CardActionTagType;
     trigger: CardActionTrigger;
+    destinationZone?: CardZone;
     targetId?: string;
     targetIds?: string[];
   };
@@ -286,6 +311,8 @@ export type GameEvent =
   | DeckRecycledEvent
   | CardPlayedEvent
   | CardDiscardedEvent
+  | CardConsumedEvent
+  | HpPaidEvent
   | CardActionTriggeredEvent
   | DiscardPhaseStartedEvent
   | CardTransformedEvent
