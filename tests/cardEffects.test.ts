@@ -265,6 +265,7 @@ describe("card effects", () => {
       cardInstanceId: sourceCard.instanceId,
       destinationZone: "TEMPORARY"
     });
+    expect(Object.prototype.hasOwnProperty.call(state.zones, "resolving")).toBe(false);
     expect(sourceCard.zone).toBe("TEMPORARY");
     expect(state.zones.hand[playerId]).not.toContain(sourceCard);
     expect(state.zones.deck[playerId]).not.toContain(sourceCard);
@@ -722,6 +723,184 @@ describe("card effects", () => {
     expect(state.zones.prepared[playerId]).toContain(readyResource);
     expect(state.zones.exhaust[playerId]).toContain(normalResource);
     expect(state.zones.temporary[playerId]).toContain(sourceCard);
+  });
+
+  it("prepares a transformed ready-action card when it is consumed as a resource", () => {
+    const store = createStartedGame(createTransformedReadyResourceCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_stance_shift",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const sourceCard: CardInstance = {
+      instanceId: "test_observe",
+      cardId: "observe",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const transformedResource: CardInstance = {
+      instanceId: "test_combat_slash",
+      cardId: "combat_slash",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [catalyst, sourceCard, transformedResource];
+
+    store.playCard(playerId, catalyst.instanceId);
+
+    expect(transformedResource.cardId).toBe("combat_thrust");
+
+    const events = store.playCard(playerId, sourceCard.instanceId, undefined, [
+      transformedResource.instanceId
+    ]);
+    const consumedEvent = events.find((event) => event.type === "CARD_CONSUMED");
+
+    expect(consumedEvent?.payload).toMatchObject({
+      cardInstanceId: transformedResource.instanceId,
+      cardId: "combat_thrust",
+      destinationZone: "PREPARED",
+      targetId: "p2",
+      targetIds: ["p2"]
+    });
+    expect(events.filter((event) =>
+      event.type === "CARD_TRANSFORMED" && event.payload.cardInstanceId === transformedResource.instanceId
+    )).toHaveLength(0);
+    expect(transformedResource.cardId).toBe("combat_thrust");
+    expect(transformedResource.zone).toBe("PREPARED");
+    expect(transformedResource.preparedTargetIds).toEqual(["p2"]);
+    expect(state.zones.prepared[playerId]).toContain(transformedResource);
+    expect(state.zones.exhaust[playerId]).not.toContain(transformedResource);
+
+    state.currentPlayerId = "p2";
+    state.zones.hand.p2 = [];
+    state.players[playerId].drawPerTurn = 0;
+    state.players[playerId].character!.abilityModifiers.dexterity = 0;
+
+    const turnEvents = store.endTurn("p2");
+
+    expect(turnEvents.find((event) => event.type === "CARD_ACTION_TRIGGERED")?.payload).toMatchObject({
+      playerId,
+      cardInstanceId: transformedResource.instanceId,
+      actionTag: "READY_ACTION",
+      trigger: "TURN_STARTED",
+      targetId: "p2",
+      targetIds: ["p2"]
+    });
+    expect(turnEvents.find((event) =>
+      event.type === "DAMAGE_APPLIED" && event.payload.sourceId === transformedResource.instanceId
+    )?.payload).toMatchObject({
+      targetId: "p2",
+      amount: 1,
+      hpAfter: 19
+    });
+    expect(findResolvedEvent(turnEvents, transformedResource.instanceId)?.payload.destinationZone).toBe("TEMPORARY");
+    expect(transformedResource.preparedTargetIds).toBeUndefined();
+    expect(transformedResource.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(transformedResource);
+  });
+
+  it("cancels a prepared ready action if its scheduled target is no longer selectable", () => {
+    const store = createStartedGame(createTransformedReadyResourceCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_stance_shift",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const sourceCard: CardInstance = {
+      instanceId: "test_observe",
+      cardId: "observe",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const transformedResource: CardInstance = {
+      instanceId: "test_combat_slash",
+      cardId: "combat_slash",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [catalyst, sourceCard, transformedResource];
+
+    store.playCard(playerId, catalyst.instanceId);
+    store.playCard(playerId, sourceCard.instanceId, undefined, [
+      transformedResource.instanceId
+    ]);
+
+    state.players.p2.hp = 0;
+    state.currentPlayerId = "p2";
+    state.zones.hand.p2 = [];
+    state.players[playerId].drawPerTurn = 0;
+    state.players[playerId].character!.abilityModifiers.dexterity = 0;
+
+    const turnEvents = store.endTurn("p2");
+    const resolvedEvent = findResolvedEvent(turnEvents, transformedResource.instanceId);
+
+    expect(turnEvents.find((event) =>
+      event.type === "DAMAGE_APPLIED" && event.payload.sourceId === transformedResource.instanceId
+    )).toBeUndefined();
+    expect(resolvedEvent?.payload).toMatchObject({
+      destinationZone: "EXHAUST",
+      cancelled: true,
+      cancelReason: "INVALID_TARGET"
+    });
+    expect(transformedResource.preparedTargetIds).toBeUndefined();
+    expect(transformedResource.zone).toBe("EXHAUST");
+    expect(state.zones.exhaust[playerId]).toContain(transformedResource);
+  });
+
+  it("requires an explicit scheduled target for consumed ready actions when multiple enemies are selectable", () => {
+    const store = createStartedGameWithPlayers(["Alice", "Bob", "Cara", "Dan"], createTransformedReadyResourceCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const catalyst: CardInstance = {
+      instanceId: "test_stance_shift",
+      cardId: "stance_shift",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const sourceCard: CardInstance = {
+      instanceId: "test_observe",
+      cardId: "observe",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const transformedResource: CardInstance = {
+      instanceId: "test_combat_slash",
+      cardId: "combat_slash",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [catalyst, sourceCard, transformedResource];
+    store.playCard(playerId, catalyst.instanceId);
+
+    expect(() => store.playCard(playerId, sourceCard.instanceId, undefined, [
+      transformedResource.instanceId
+    ])).toThrow("requires a target");
+
+    const events = store.playCard(playerId, sourceCard.instanceId, undefined, [
+      transformedResource.instanceId
+    ], {
+      [transformedResource.instanceId]: "p4"
+    });
+
+    expect(events.find((event) => event.type === "CARD_CONSUMED")?.payload).toMatchObject({
+      cardInstanceId: transformedResource.instanceId,
+      destinationZone: "PREPARED",
+      targetId: "p4",
+      targetIds: ["p4"]
+    });
+    expect(transformedResource.preparedTargetIds).toEqual(["p4"]);
   });
 
   it("rejects hp resource costs that would reduce the player to 0 hp", () => {
@@ -1248,6 +1427,68 @@ function createResourceCostCatalog(): CardCatalog {
     },
     starterDeckCardIds: ["blood_rite", "dagger_strike", "stored_blessing"],
     transformRules: []
+  };
+}
+
+function createTransformedReadyResourceCatalog(): CardCatalog {
+  return {
+    version: "transformed-ready-resource-test",
+    cardDefinitions: {
+      stance_shift: {
+        cardId: "stance_shift",
+        name: "Stance Shift",
+        cost: 0,
+        type: "SKILL",
+        description: "Transform combat slash into combat thrust.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      observe: {
+        cardId: "observe",
+        name: "Observe",
+        cost: 0,
+        type: "SKILL",
+        description: "Consume 1 card.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        resourceCosts: {
+          consumeCardCount: 1
+        }
+      },
+      combat_slash: {
+        cardId: "combat_slash",
+        name: "Combat Slash",
+        cost: 1,
+        type: "ATTACK",
+        description: "Deal 1 damage.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      combat_thrust: {
+        cardId: "combat_thrust",
+        name: "Combat Thrust",
+        cost: 1,
+        type: "ATTACK",
+        description: "Prepare a thrust attack.",
+        effect: { type: "DAMAGE", value: 1 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true },
+        actionTags: [{
+          type: "READY_ACTION",
+          label: "準備動作",
+          trigger: "TURN_STARTED"
+        }]
+      }
+    },
+    starterDeckCardIds: ["stance_shift", "observe", "combat_slash", "combat_thrust"],
+    transformRules: [{
+      ruleId: "T_THRUST",
+      triggerCardId: "stance_shift",
+      sourceCardId: "combat_slash",
+      targetCardId: "combat_thrust",
+      scope: "OWNER_HAND",
+      reversible: true,
+      revertTiming: "TURN_END"
+    }]
   };
 }
 

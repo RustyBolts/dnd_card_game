@@ -50,14 +50,20 @@ export class CommandSender {
     });
   }
 
-  play(cardInstanceId: string, targetId?: string, resourceCardInstanceIds?: string[]): void {
+  play(
+    cardInstanceId: string,
+    targetId?: string,
+    resourceCardInstanceIds?: string[],
+    resourceTargets?: Record<string, string>
+  ): void {
     this.send({
       type: "PLAY_CARD",
       requestId: createRequestId(),
       payload: {
         cardInstanceId,
         targetId,
-        ...(resourceCardInstanceIds ? { resourceCardInstanceIds } : {})
+        ...(resourceCardInstanceIds ? { resourceCardInstanceIds } : {}),
+        ...(resourceTargets ? { resourceTargets } : {})
       }
     });
   }

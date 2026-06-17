@@ -78,6 +78,8 @@ type PendingPlayAction = {
   targetId?: string;
 };
 
+type ResourceTargetMap = Record<string, string>;
+
 let socket: WebSocket | null = null;
 let playerId: string | null = null;
 let localState: VisibleGameState | null = null;
@@ -163,6 +165,11 @@ playConfirmSubmit.addEventListener("click", () => {
 });
 playConfirmBody.addEventListener("change", (event) => {
   const target = event.target;
+  if (target instanceof HTMLSelectElement) {
+    updatePlayConfirmState();
+    return;
+  }
+
   if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
     return;
   }
@@ -411,7 +418,7 @@ function render(): void {
           ${characterRows}
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
-          <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 結算 ${localState!.zones.resolvingCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
+          <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
         </div>
       `;
     })
@@ -457,11 +464,6 @@ function renderPileControls(): void {
       key: "prepared",
       label: "準備牌堆",
       count: localState.zones.preparedCounts[playerId] ?? 0
-    },
-    {
-      key: "resolving",
-      label: "結算區",
-      count: localState.zones.resolvingCounts[playerId] ?? 0
     },
     {
       key: "temporary",
@@ -729,7 +731,7 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
 function renderCard(card: VisibleCardInstance): string {
   const visibleCard = hydrateVisibleCard(card);
   const targeting = getCardTargeting(visibleCard);
-  const targetControl = playsIntoPreparedPile(visibleCard) ? "" : renderTargetControl(visibleCard, targeting);
+  const targetControl = usesPlayTargetControl(visibleCard) ? renderTargetControl(visibleCard, targeting) : "";
   const isPlayDisabled =
     !canTakeMainAction() ||
     (requiresEffectTarget(visibleCard) && getPotentialTargetIds(targeting).length === 0) ||
@@ -865,14 +867,6 @@ function getPileView(pileKey: string): { label: string; count: number; cards: Vi
     };
   }
 
-  if (pileKey === "resolving") {
-    return {
-      label: "結算區",
-      count: localState.zones.resolvingCounts[playerId] ?? 0,
-      cards: localState.zones.resolving[playerId] ?? []
-    };
-  }
-
   if (pileKey === "exhaust") {
     return {
       label: "消耗牌堆",
@@ -972,7 +966,7 @@ handEl.addEventListener("click", (event) => {
     const selectedTargetId = selectedTargetForCard(playId);
     const targeting = card ? getCardTargeting(card) : null;
 
-    if (card && !playsIntoPreparedPile(card) && targeting?.requiresTarget && !selectedTargetId) {
+    if (card && usesPlayTargetControl(card) && targeting?.requiresTarget && !selectedTargetId) {
       addLog({ type: "LOCAL_NOTICE", payload: { message: "No valid target selected." } });
       return;
     }
@@ -1034,15 +1028,18 @@ function send(command: unknown): void {
 function sendPlayCardCommand(
   cardInstanceId: string,
   targetId?: string,
-  resourceCardInstanceIds: string[] = []
+  resourceCardInstanceIds: string[] = [],
+  resourceTargets: ResourceTargetMap = {}
 ): void {
+  const resourceTargetEntries = Object.keys(resourceTargets);
   send({
     type: "PLAY_CARD",
     requestId: requestId(),
     payload: {
       cardInstanceId,
       targetId,
-      ...(resourceCardInstanceIds.length > 0 ? { resourceCardInstanceIds } : {})
+      ...(resourceCardInstanceIds.length > 0 ? { resourceCardInstanceIds } : {}),
+      ...(resourceTargetEntries.length > 0 ? { resourceTargets } : {})
     }
   });
 }
@@ -1106,16 +1103,7 @@ function renderPlayConfirmBody(card: VisibleCardInstance, targetId?: string): st
         <div class="resource-options">
           ${candidates.map((candidate) => {
             const visibleCandidate = hydrateVisibleCard(candidate);
-            const destinationLabel = isReadyActionCard(visibleCandidate) ? "準備牌堆" : "消耗牌堆";
-            return `
-              <label>
-                <input type="checkbox" data-resource-card value="${escapeHtml(candidate.instanceId)}" />
-                <span>
-                  <strong>${escapeHtml(visibleCandidate.name ?? visibleCandidate.cardId)}</strong>
-                  <small>${escapeHtml(destinationLabel)}</small>
-                </span>
-              </label>
-            `;
+            return renderResourceOption(visibleCandidate);
           }).join("")}
         </div>
       </section>
@@ -1123,10 +1111,102 @@ function renderPlayConfirmBody(card: VisibleCardInstance, targetId?: string): st
   `;
 }
 
+function renderResourceOption(card: VisibleCardInstance): string {
+  const destinationLabel = isReadyActionCard(card) ? "準備牌堆" : "消耗牌堆";
+
+  return `
+    <div class="resource-option">
+      <label class="resource-option-main">
+        <input type="checkbox" data-resource-card value="${escapeHtml(card.instanceId)}" />
+        <span>
+          <strong>${escapeHtml(card.name ?? card.cardId)}</strong>
+          <small>${escapeHtml(destinationLabel)}</small>
+        </span>
+      </label>
+      ${renderPreparedResourceTargetControl(card)}
+    </div>
+  `;
+}
+
+function renderPreparedResourceTargetControl(card: VisibleCardInstance): string {
+  if (!isReadyActionCard(card)) {
+    return "";
+  }
+
+  const targeting = getCardTargeting(card);
+  if (!targeting.requiresTarget) {
+    return "";
+  }
+
+  const options = getPotentialTargetIds(targeting);
+  if (options.length === 0) {
+    return `<p class="resource-target-empty">No valid prepared target</p>`;
+  }
+
+  if (options.length === 1) {
+    return `<small class="resource-target-auto">預定目標 ${escapeHtml(playerLabel(options[0]!))}</small>`;
+  }
+
+  return `
+    <label class="resource-target">
+      預定目標
+      <select data-resource-target-for="${escapeHtml(card.instanceId)}">
+        ${options
+          .map((id) => `<option value="${id}">${escapeHtml(playerLabel(id))}</option>`)
+          .join("")}
+      </select>
+    </label>
+  `;
+}
+
 function selectedPendingResourceCardIds(): string[] {
   return Array.from(playConfirmBody.querySelectorAll<HTMLInputElement>("input[data-resource-card]"))
     .filter((candidate) => candidate.checked)
     .map((candidate) => candidate.value);
+}
+
+function selectedPendingResourceTargets(): ResourceTargetMap {
+  return Object.fromEntries(
+    selectedPendingResourceCardIds()
+      .map((cardInstanceId) => {
+        const card = findVisibleHandCard(cardInstanceId);
+        if (!card || !isReadyActionCard(card)) {
+          return null;
+        }
+
+        const targetId = selectedPreparedResourceTargetId(card);
+        return targetId ? [cardInstanceId, targetId] as const : null;
+      })
+      .filter((entry): entry is readonly [string, string] => entry !== null)
+  );
+}
+
+function selectedPreparedResourceTargetId(card: VisibleCardInstance): string | undefined {
+  const targeting = getCardTargeting(card);
+  if (!targeting.requiresTarget) {
+    return undefined;
+  }
+
+  const options = getPotentialTargetIds(targeting);
+  if (options.length === 1) {
+    return options[0];
+  }
+
+  const select = Array.from(playConfirmBody.querySelectorAll<HTMLSelectElement>("select[data-resource-target-for]"))
+    .find((candidate) => candidate.dataset.resourceTargetFor === card.instanceId);
+  return select?.value || undefined;
+}
+
+function hasMissingSelectedPreparedResourceTargets(): boolean {
+  return selectedPendingResourceCardIds().some((cardInstanceId) => {
+    const card = findVisibleHandCard(cardInstanceId);
+    if (!card || !isReadyActionCard(card)) {
+      return false;
+    }
+
+    const targeting = getCardTargeting(card);
+    return targeting.requiresTarget && !selectedPreparedResourceTargetId(card);
+  });
 }
 
 function updatePlayConfirmState(): void {
@@ -1153,6 +1233,12 @@ function updatePlayConfirmState(): void {
     return;
   }
 
+  if (hasMissingSelectedPreparedResourceTargets()) {
+    playConfirmStatus.textContent = "準備動作需要預定目標";
+    playConfirmSubmit.disabled = true;
+    return;
+  }
+
   playConfirmStatus.textContent = consumeCardCount > 0
     ? `已選 ${selectedCount}/${consumeCardCount} 張`
     : "可支付";
@@ -1172,12 +1258,21 @@ function confirmPendingPlay(): void {
 
   const selectedResourceCardIds = selectedPendingResourceCardIds();
   const consumeCardCount = card.resourceCosts?.consumeCardCount ?? 0;
-  if (selectedResourceCardIds.length !== consumeCardCount || !canPayHpResourceCost(card)) {
+  if (
+    selectedResourceCardIds.length !== consumeCardCount ||
+    !canPayHpResourceCost(card) ||
+    hasMissingSelectedPreparedResourceTargets()
+  ) {
     updatePlayConfirmState();
     return;
   }
 
-  sendPlayCardCommand(card.instanceId, pendingPlayAction.targetId, selectedResourceCardIds);
+  sendPlayCardCommand(
+    card.instanceId,
+    pendingPlayAction.targetId,
+    selectedResourceCardIds,
+    selectedPendingResourceTargets()
+  );
   playConfirmDialog.close();
 }
 
@@ -1205,8 +1300,16 @@ function isReadyActionCard(card: VisibleCardInstance): boolean {
   return Boolean(card.actionTags?.some((tag) => tag.type === "READY_ACTION"));
 }
 
+function playsReadyActionIntoPreparedPile(card: VisibleCardInstance): boolean {
+  return isReadyActionCard(card) && Boolean(card.consumable);
+}
+
+function usesPlayTargetControl(card: VisibleCardInstance): boolean {
+  return !playsIntoPreparedPile(card) || playsReadyActionIntoPreparedPile(card);
+}
+
 function requiresEffectTarget(card: VisibleCardInstance): boolean {
-  if (playsIntoPreparedPile(card)) {
+  if (playsIntoPreparedPile(card) && !playsReadyActionIntoPreparedPile(card)) {
     return false;
   }
 

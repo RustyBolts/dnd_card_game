@@ -50,13 +50,15 @@ export class CommandValidator {
         const cardInstanceId = readString(payload, "cardInstanceId");
         const targetId = typeof payload.targetId === "string" ? payload.targetId : undefined;
         const resourceCardInstanceIds = readOptionalStringArray(payload, "resourceCardInstanceIds");
+        const resourceTargets = readOptionalStringRecord(payload, "resourceTargets");
         return {
           type: "PLAY_CARD",
           requestId,
           payload: {
             cardInstanceId,
             targetId,
-            ...(resourceCardInstanceIds ? { resourceCardInstanceIds } : {})
+            ...(resourceCardInstanceIds ? { resourceCardInstanceIds } : {}),
+            ...(resourceTargets ? { resourceTargets } : {})
           }
         };
       }
@@ -130,6 +132,31 @@ function readOptionalStringArray(payload: Record<string, unknown>, key: string):
 
     return entry;
   });
+}
+
+function readOptionalStringRecord(payload: Record<string, unknown>, key: string): Record<string, string> | undefined {
+  const value = payload[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} must be an object.`);
+  }
+
+  const entries = Object.entries(value).map(([entryKey, entryValue]) => {
+    if (entryKey.trim() === "") {
+      throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} cannot contain an empty key.`);
+    }
+
+    if (typeof entryValue !== "string" || entryValue.trim() === "") {
+      throw new CommandError("INVALID_PAYLOAD", `Payload field ${key}.${entryKey} must be a non-empty string.`);
+    }
+
+    return [entryKey, entryValue] as const;
+  });
+
+  return Object.fromEntries(entries);
 }
 
 function readAbilityScores(payload: Record<string, unknown>): AbilityScores {

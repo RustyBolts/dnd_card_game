@@ -69,6 +69,7 @@ export type CardInstance = {
   cardId: string;
   ownerId: string;
   zone: CardZone;
+  preparedTargetIds?: string[];
 };
 
 export type VisibleCardInstance = CardInstance & {

@@ -545,7 +545,15 @@ h3 {
   gap: 8px;
 }
 
-.resource-options label {
+.resource-option {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(245, 243, 232, 0.08);
+  border-radius: 6px;
+}
+
+.resource-option-main {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
@@ -563,6 +571,24 @@ h3 {
   display: grid;
   gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.resource-target {
+  display: grid;
+  gap: 4px;
+  color: #d6d2bd;
+  font-size: 12px;
+}
+
+.resource-target select {
+  width: 100%;
+}
+
+.resource-target-auto,
+.resource-target-empty {
+  color: #8e9188;
+  font-size: 12px;
+  margin: 0 0 0 26px;
 }
 
 .play-confirm-actions {

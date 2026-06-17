@@ -55,6 +55,7 @@ export type PlayCardCommand = {
     cardInstanceId: string;
     targetId?: string;
     resourceCardInstanceIds?: string[];
+    resourceTargets?: Record<string, string>;
   };
 };
 
@@ -178,6 +179,8 @@ export type CardConsumedEvent = {
     cardId: string;
     sourceCardInstanceId: string;
     destinationZone: CardZone;
+    targetId?: string;
+    targetIds?: string[];
   };
 };
 
@@ -215,6 +218,8 @@ export type CardResolvedEvent = {
     cardInstanceId: string;
     cardId: string;
     destinationZone: CardZone;
+    cancelled?: boolean;
+    cancelReason?: string;
   };
 };
 

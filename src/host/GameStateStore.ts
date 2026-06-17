@@ -4,6 +4,7 @@ import { resolveCardEffect, type EffectEvent } from "../shared/rules/cardEffects
 import {
   getAutomaticTargetIds,
   getCardTargeting,
+  getSelectableTargetIds,
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
 import type { CardActionTag, CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
@@ -47,8 +48,13 @@ type PreparedActionTriggerContext = {
   effectEvents: EffectEvent[];
 };
 
+type ConsumedCardPayment = {
+  card: CardInstance;
+  preparedTargetIds?: string[];
+};
+
 type PlayResourcePayment = {
-  consumedCards: CardInstance[];
+  consumedCards: ConsumedCardPayment[];
 };
 
 type ResolvedCardDestinationZone = Extract<CardZone, "TEMPORARY" | "EXHAUST">;
@@ -88,7 +94,6 @@ export class GameStateStore {
         deck: {},
         hand: {},
         prepared: {},
-        resolving: {},
         temporary: {},
         exhaust: {},
         board: [],
@@ -155,7 +160,6 @@ export class GameStateStore {
     this.state.zones.deck[playerId] = [];
     this.state.zones.hand[playerId] = [];
     this.state.zones.prepared[playerId] = [];
-    this.state.zones.resolving[playerId] = [];
     this.state.zones.temporary[playerId] = [];
     this.state.zones.exhaust[playerId] = [];
 
@@ -282,7 +286,8 @@ export class GameStateStore {
     playerId: string,
     cardInstanceId: string,
     targetId?: string,
-    resourceCardInstanceIds: string[] = []
+    resourceCardInstanceIds: string[] = [],
+    resourceTargets: Record<string, string> = {}
   ): GameEvent[] {
     this.assertPlaying();
     this.assertCurrentPlayer(playerId);
@@ -295,7 +300,8 @@ export class GameStateStore {
       playerId,
       cardInstanceId,
       definition,
-      resourceCardInstanceIds
+      resourceCardInstanceIds,
+      resourceTargets
     );
     const player = this.state.players[playerId];
 
@@ -303,8 +309,12 @@ export class GameStateStore {
 
     if (preparedActionTag) {
       const events = this.payAdditionalCardCosts(playerId, card, definition, resourcePayment);
+      const preparedTargetIds = preparedActionTag.type === "READY_ACTION"
+        ? this.resolveConsumedReadyActionTargetIds(playerId, definition, targetId)
+        : undefined;
       player.energy -= definition.cost;
       this.removeCardFromHand(playerId, cardInstanceId);
+      this.setPreparedTargetIds(card, preparedTargetIds);
       const destinationZone = this.moveCardToPrepared(card);
 
       events.push({
@@ -454,7 +464,6 @@ export class GameStateStore {
       );
       this.state.zones.hand[playerId] = [];
       this.state.zones.prepared[playerId] = [];
-      this.state.zones.resolving[playerId] = [];
       this.state.zones.temporary[playerId] = [];
       this.state.zones.exhaust[playerId] = [];
     }
@@ -793,7 +802,7 @@ export class GameStateStore {
   ): GameEvent[] {
     this.removeCardFromPrepared(playerId, card.instanceId);
     const destinationZone = this.moveCardToResolving(card);
-    const targetIds = this.resolvePreparedActionTargetIds(actionTag, playerId, defaultTargetId);
+    const targetIds = this.resolvePreparedActionTargetIds(actionTag, playerId, card, definition, defaultTargetId);
     const events: GameEvent[] = [
       {
         type: "CARD_ACTION_TRIGGERED",
@@ -811,6 +820,16 @@ export class GameStateStore {
       }
     ];
 
+    if (!this.canResolvePreparedActionTargets(playerId, definition, targetIds)) {
+      events.push(
+        this.resolveCardToFinalZone(playerId, card, "EXHAUST", {
+          cancelled: true,
+          cancelReason: "INVALID_TARGET"
+        })
+      );
+      return events;
+    }
+
     events.push(
       ...this.resolveCardFromResolving(playerId, card, definition, targetIds, {
         finalDestinationZone: this.getPlayedCardDestinationZone(definition),
@@ -824,13 +843,39 @@ export class GameStateStore {
   private resolvePreparedActionTargetIds(
     actionTag: CardActionTag,
     playerId: string,
+    card: CardInstance,
+    definition: CardDefinition,
     defaultTargetId: string
   ): string[] {
     if (actionTag.type === "READY_ACTION") {
-      return [playerId];
+      return card.preparedTargetIds ?? this.resolveAutomaticActionTargetIds(definition, playerId) ?? [];
     }
 
     return [defaultTargetId];
+  }
+
+  private canResolvePreparedActionTargets(
+    playerId: string,
+    definition: CardDefinition,
+    targetIds: string[]
+  ): boolean {
+    const targeting = getCardTargeting(definition);
+    if (targeting.requiresTarget && targetIds.length === 0) {
+      return false;
+    }
+
+    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
+      return false;
+    }
+
+    return targetIds.every((targetId) => {
+      const target = this.state.players[targetId];
+      return Boolean(
+        target &&
+        target.hp > 0 &&
+        isPlayerTargetAllowed(this.state, playerId, targetId, targeting)
+      );
+    });
   }
 
   private removeCardFromPrepared(playerId: string, cardInstanceId: string): void {
@@ -845,12 +890,14 @@ export class GameStateStore {
     playerId: string,
     sourceCardInstanceId: string,
     definition: CardDefinition,
-    resourceCardInstanceIds: string[]
+    resourceCardInstanceIds: string[],
+    resourceTargets: Record<string, string>
   ): PlayResourcePayment {
     const consumeCardCount = definition.resourceCosts?.consumeCardCount ?? 0;
+    const resourceTargetCardIds = Object.keys(resourceTargets);
 
     if (consumeCardCount === 0) {
-      if (resourceCardInstanceIds.length > 0) {
+      if (resourceCardInstanceIds.length > 0 || resourceTargetCardIds.length > 0) {
         throw new CommandError(
           "INVALID_RESOURCE_COST",
           `${definition.name} does not require consumed card resources.`
@@ -874,17 +921,56 @@ export class GameStateStore {
       throw new CommandError("INVALID_RESOURCE_COST", "Consumed card resources must be unique.");
     }
 
+    const consumedCardIds = new Set(resourceCardInstanceIds);
+    for (const resourceTargetCardId of resourceTargetCardIds) {
+      if (!consumedCardIds.has(resourceTargetCardId)) {
+        throw new CommandError(
+          "INVALID_RESOURCE_TARGET",
+          `Resource target was provided for unselected card ${resourceTargetCardId}.`
+        );
+      }
+    }
+
     const consumedCards = resourceCardInstanceIds.map((resourceCardInstanceId) => {
       if (resourceCardInstanceId === sourceCardInstanceId) {
         throw new CommandError("INVALID_RESOURCE_COST", "A card cannot consume itself as a resource.");
       }
 
-      return this.findCardInHand(playerId, resourceCardInstanceId).card;
+      const card = this.findCardInHand(playerId, resourceCardInstanceId).card;
+      const consumedDefinition = this.getCardDefinition(card.cardId);
+      const preparedTargetIds = this.getReadyActionTag(consumedDefinition)
+        ? this.resolveConsumedReadyActionTargetIds(playerId, consumedDefinition, resourceTargets[card.instanceId])
+        : undefined;
+      return {
+        card,
+        preparedTargetIds
+      };
     });
 
     return {
       consumedCards
     };
+  }
+
+  private resolveConsumedReadyActionTargetIds(
+    playerId: string,
+    definition: CardDefinition,
+    targetId?: string
+  ): string[] {
+    const targeting = getCardTargeting(definition);
+    const resolvedTargetId = targetId ?? this.getAutoSelectedPreparedTargetId(playerId, targeting);
+    const targetIds = this.resolveTargetIds(definition, playerId, resolvedTargetId);
+    this.assertEffectTargetsResolved(definition, targetIds);
+    return targetIds;
+  }
+
+  private getAutoSelectedPreparedTargetId(playerId: string, targeting: CardDefinition["targeting"]): string | undefined {
+    if (!targeting.requiresTarget || targeting.selection !== "SINGLE") {
+      return undefined;
+    }
+
+    const selectableTargetIds = getSelectableTargetIds(this.state, playerId, targeting);
+    return selectableTargetIds.length === 1 ? selectableTargetIds[0] : undefined;
   }
 
   private assertCanPayCardCosts(player: PlayerState, definition: CardDefinition): void {
@@ -909,11 +995,20 @@ export class GameStateStore {
   ): GameEvent[] {
     const events: GameEvent[] = [];
 
-    for (const consumedCard of payment.consumedCards) {
-      events.push(...this.revertPendingCardTransformForLeavingHand(playerId, consumedCard));
+    for (const consumedCardPayment of payment.consumedCards) {
+      const consumedCard = consumedCardPayment.card;
       const consumedDefinition = this.getCardDefinition(consumedCard.cardId);
+      const isConsumedAsReadyAction = Boolean(this.getReadyActionTag(consumedDefinition));
+      if (isConsumedAsReadyAction) {
+        this.clearPendingCardTransformForLeavingHand(playerId, consumedCard);
+        this.setPreparedTargetIds(consumedCard, consumedCardPayment.preparedTargetIds);
+      } else {
+        events.push(...this.revertPendingCardTransformForLeavingHand(playerId, consumedCard));
+        delete consumedCard.preparedTargetIds;
+      }
+
       this.removeCardFromHand(playerId, consumedCard.instanceId);
-      const destinationZone = this.getReadyActionTag(consumedDefinition)
+      const destinationZone = isConsumedAsReadyAction
         ? this.moveCardToPrepared(consumedCard)
         : this.moveCardToExhaust(consumedCard);
 
@@ -925,7 +1020,9 @@ export class GameStateStore {
           cardInstanceId: consumedCard.instanceId,
           cardId: consumedCard.cardId,
           sourceCardInstanceId: sourceCard.instanceId,
-          destinationZone
+          destinationZone,
+          targetId: consumedCardPayment.preparedTargetIds?.[0],
+          targetIds: consumedCardPayment.preparedTargetIds
         }
       } satisfies CardConsumedEvent);
     }
@@ -1061,10 +1158,17 @@ export class GameStateStore {
     return card.zone;
   }
 
+  private setPreparedTargetIds(card: CardInstance, targetIds: string[] | undefined): void {
+    if (targetIds && targetIds.length > 0) {
+      card.preparedTargetIds = targetIds;
+      return;
+    }
+
+    delete card.preparedTargetIds;
+  }
+
   private moveCardToResolving(card: CardInstance): CardZone {
     card.zone = "RESOLVING";
-    this.state.zones.resolving[card.ownerId] ??= [];
-    this.state.zones.resolving[card.ownerId].push(card);
     return card.zone;
   }
 
@@ -1085,9 +1189,13 @@ export class GameStateStore {
   private resolveCardToFinalZone(
     playerId: string,
     card: CardInstance,
-    destinationZone: ResolvedCardDestinationZone
+    destinationZone: ResolvedCardDestinationZone,
+    options: {
+      cancelled?: boolean;
+      cancelReason?: string;
+    } = {}
   ): CardResolvedEvent {
-    this.removeCardFromResolving(playerId, card.instanceId);
+    delete card.preparedTargetIds;
     const finalZone = destinationZone === "EXHAUST"
       ? this.moveCardToExhaust(card)
       : this.moveCardToTemporary(card);
@@ -1099,17 +1207,10 @@ export class GameStateStore {
         playerId,
         cardInstanceId: card.instanceId,
         cardId: card.cardId,
-        destinationZone: finalZone
+        destinationZone: finalZone,
+        ...(options.cancelled ? { cancelled: true, cancelReason: options.cancelReason } : {})
       }
     };
-  }
-
-  private removeCardFromResolving(playerId: string, cardInstanceId: string): void {
-    const resolving = this.state.zones.resolving[playerId] ?? [];
-    const index = resolving.findIndex((candidate) => candidate.instanceId === cardInstanceId);
-    if (index !== -1) {
-      resolving.splice(index, 1);
-    }
   }
 
   private resolveRetainedEnergy(player: PlayerState): number {
@@ -1240,6 +1341,12 @@ export class GameStateStore {
 
     this.pendingCardReverts = remainingReverts;
     return events;
+  }
+
+  private clearPendingCardTransformForLeavingHand(playerId: string, card: CardInstance): void {
+    this.pendingCardReverts = this.pendingCardReverts.filter(
+      (pending) => pending.playerId !== playerId || pending.cardInstanceId !== card.instanceId
+    );
   }
 
   private transformCard(

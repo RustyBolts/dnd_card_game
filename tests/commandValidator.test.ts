@@ -117,7 +117,10 @@ describe("host command validation", () => {
       payload: {
         cardInstanceId: "card_source",
         targetId: "p2",
-        resourceCardInstanceIds: ["card_a", "card_b"]
+        resourceCardInstanceIds: ["card_a", "card_b"],
+        resourceTargets: {
+          card_a: "p2"
+        }
       }
     });
 
@@ -127,7 +130,10 @@ describe("host command validation", () => {
       payload: {
         cardInstanceId: "card_source",
         targetId: "p2",
-        resourceCardInstanceIds: ["card_a", "card_b"]
+        resourceCardInstanceIds: ["card_a", "card_b"],
+        resourceTargets: {
+          card_a: "p2"
+        }
       }
     });
   });

@@ -24,7 +24,8 @@ export class CommandRouter {
           playerId,
           command.payload.cardInstanceId,
           command.payload.targetId,
-          command.payload.resourceCardInstanceIds
+          command.payload.resourceCardInstanceIds,
+          command.payload.resourceTargets
         );
       case "DISCARD_CARD":
         return this.store.discardCard(playerId, command.payload.cardInstanceId, command.payload.targetId);
