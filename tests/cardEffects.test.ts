@@ -32,6 +32,86 @@ describe("card effects", () => {
     expect(state.zones.temporary[playerId]).toContain(card);
   });
 
+  it("applies DAMAGE effectCount as separate hits", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const attackerId = "p1";
+    const defenderId = "p2";
+    const comboCard: CardInstance = {
+      instanceId: "test_combo",
+      cardId: "combo",
+      ownerId: attackerId,
+      zone: "HAND"
+    };
+
+    state.players[attackerId].energy = 2;
+    state.zones.hand[attackerId].push(comboCard);
+
+    const events = store.playCard(attackerId, comboCard.instanceId, defenderId);
+    const damageEvents = events.filter((event) => event.type === "DAMAGE_APPLIED");
+
+    expect(damageEvents).toHaveLength(2);
+    expect(damageEvents.map((event) => event.payload)).toEqual([
+      {
+        sourceId: comboCard.instanceId,
+        targetId: defenderId,
+        amount: 3,
+        hpAfter: 17
+      },
+      {
+        sourceId: comboCard.instanceId,
+        targetId: defenderId,
+        amount: 3,
+        hpAfter: 14
+      }
+    ]);
+    expect(state.players[defenderId].hp).toBe(14);
+  });
+
+  it("lets one prepared reaction action prevent only one DAMAGE hit", () => {
+    const store = createStartedGame(createPreparedActionCatalog());
+    const state = store.getState();
+    const defenderId = "p1";
+    const attackerId = "p2";
+    const hideCard: CardInstance = {
+      instanceId: "test_hide",
+      cardId: "hide",
+      ownerId: defenderId,
+      zone: "PREPARED"
+    };
+    const comboCard: CardInstance = {
+      instanceId: "test_combo",
+      cardId: "combo",
+      ownerId: attackerId,
+      zone: "HAND"
+    };
+
+    state.currentPlayerId = attackerId;
+    state.players[attackerId].energy = 2;
+    state.zones.prepared[defenderId] = [hideCard];
+    state.zones.hand[attackerId].push(comboCard);
+
+    const events = store.playCard(attackerId, comboCard.instanceId, defenderId);
+    const preventedEvent = events.find((event) => event.type === "DAMAGE_PREVENTED");
+    const damageEvents = events.filter((event) => event.type === "DAMAGE_APPLIED");
+
+    expect(preventedEvent?.payload).toEqual({
+      sourceId: comboCard.instanceId,
+      targetId: defenderId,
+      amount: 3,
+      preventedByCardInstanceId: hideCard.instanceId
+    });
+    expect(damageEvents).toHaveLength(1);
+    expect(damageEvents[0]?.payload.hpAfter).toBe(17);
+    expect(events.indexOf(preventedEvent!)).toBeLessThan(events.indexOf(damageEvents[0]!));
+    const hideResolvedEvent = findResolvedEvent(events, hideCard.instanceId);
+    expect(hideResolvedEvent?.payload.destinationZone).toBe("EXHAUST");
+    expect(hideResolvedEvent?.payload.cancelled).toBeUndefined();
+    expect(state.players[defenderId].hp).toBe(17);
+    expect(state.zones.exhaust[defenderId]).toContain(hideCard);
+    expect(state.zones.prepared[defenderId]).not.toContain(hideCard);
+  });
+
   it("moves consumable cards to the exhaust pile when played", () => {
     const store = createStartedGame(createConsumableCatalog());
     const state = store.getState();
@@ -310,6 +390,302 @@ describe("card effects", () => {
     expect(state.zones.temporary[playerId]).toContain(sourceCard);
   });
 
+  it("resolves a non-consumable status card when it is discarded", () => {
+    const store = createStartedGame(createStatusCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_bleeding",
+      cardId: "bleeding",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].hp = 10;
+    state.zones.hand[playerId] = [card];
+
+    const events = store.discardCard(playerId, card.instanceId);
+
+    expect(events.find((event) => event.type === "CARD_DISCARDED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "HP_LOST")?.payload).toMatchObject({
+      sourceId: card.instanceId,
+      targetId: playerId,
+      amount: 1,
+      hpAfter: 9
+    });
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload).toMatchObject({
+      cardInstanceId: card.instanceId,
+      destinationZone: "TEMPORARY"
+    });
+    expect(state.players[playerId].hp).toBe(9);
+    expect(card.zone).toBe("TEMPORARY");
+    expect(state.zones.temporary[playerId]).toContain(card);
+  });
+
+  it("resolves a consumable status card into the exhaust pile after losing energy", () => {
+    const store = createStartedGame(createStatusCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_clumsy",
+      cardId: "clumsy",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 2;
+    state.zones.hand[playerId] = [card];
+
+    const events = store.discardCard(playerId, card.instanceId);
+
+    expect(events.find((event) => event.type === "ENERGY_LOST")?.payload).toMatchObject({
+      sourceId: card.instanceId,
+      targetId: playerId,
+      amount: 1,
+      energyAfter: 1
+    });
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload.destinationZone).toBe("EXHAUST");
+    expect(state.players[playerId].energy).toBe(1);
+    expect(card.zone).toBe("EXHAUST");
+    expect(state.zones.exhaust[playerId]).toContain(card);
+    expect(state.zones.temporary[playerId]).not.toContain(card);
+  });
+
+  it("does not emit energy loss when a status card resolves with no remaining energy", () => {
+    const store = createStartedGame(createStatusCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const card: CardInstance = {
+      instanceId: "test_empty_clumsy",
+      cardId: "clumsy",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [card];
+
+    const events = store.discardCard(playerId, card.instanceId);
+
+    expect(events.find((event) => event.type === "ENERGY_LOST")).toBeUndefined();
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload.destinationZone).toBe("EXHAUST");
+    expect(state.players[playerId].energy).toBe(0);
+    expect(card.zone).toBe("EXHAUST");
+  });
+
+  it("keeps a discarded status draw card out of the recycled temporary pile until it resolves", () => {
+    const store = createStartedGame(createStatusCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_slime",
+      cardId: "slime",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const drawnCard: CardInstance = {
+      instanceId: "test_drawn_bleeding",
+      cardId: "bleeding",
+      ownerId: playerId,
+      zone: "DECK"
+    };
+
+    state.zones.deck[playerId] = [drawnCard];
+    state.zones.hand[playerId] = [sourceCard];
+
+    const events = store.discardCard(playerId, sourceCard.instanceId);
+
+    expect(events.find((event) => event.type === "CARD_DISCARDED")?.payload.destinationZone).toBe("RESOLVING");
+    expect(events.find((event) => event.type === "CARD_DRAWN")?.payload.cardInstanceId).toBe(drawnCard.instanceId);
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload).toMatchObject({
+      cardInstanceId: sourceCard.instanceId,
+      destinationZone: "EXHAUST"
+    });
+    expect(sourceCard.zone).toBe("EXHAUST");
+    expect(state.zones.hand[playerId]).toContain(drawnCard);
+    expect(state.zones.hand[playerId]).not.toContain(sourceCard);
+    expect(state.zones.exhaust[playerId]).toContain(sourceCard);
+  });
+
+  it("adds the specified number of status cards to the targeted player's hand", () => {
+    const store = createStartedGame(createAddCardToHandCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const targetId = "p2";
+    const sourceCard: CardInstance = {
+      instanceId: "test_sneak_attack",
+      cardId: "sneak_attack",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const targetDeckCount = state.zones.deck[targetId].length;
+
+    state.players[playerId].energy = 1;
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.hand[targetId] = [];
+
+    const events = store.playCard(playerId, sourceCard.instanceId, targetId);
+    const addedEvents = events.filter((event) => event.type === "CARD_ADDED_TO_HAND");
+
+    expect(addedEvents).toHaveLength(2);
+    expect(addedEvents.map((event) => event.payload)).toEqual([
+      {
+        playerId: targetId,
+        sourceId: sourceCard.instanceId,
+        cardInstanceId: expect.any(String),
+        privateCardData: { cardId: "bleeding" }
+      },
+      {
+        playerId: targetId,
+        sourceId: sourceCard.instanceId,
+        cardInstanceId: expect.any(String),
+        privateCardData: { cardId: "bleeding" }
+      }
+    ]);
+    expect(addedEvents[0]?.payload.cardInstanceId).not.toBe(addedEvents[1]?.payload.cardInstanceId);
+    expect(state.zones.hand[targetId]).toHaveLength(2);
+    expect(state.zones.hand[targetId].every((card) =>
+      card.cardId === "bleeding" && card.ownerId === targetId && card.zone === "HAND"
+    )).toBe(true);
+    expect(state.zones.deck[targetId]).toHaveLength(targetDeckCount);
+    expect(events.map((event) => event.type)).not.toContain("CARD_DRAWN");
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.seq).toBeGreaterThan(
+      addedEvents[1]?.seq ?? 0
+    );
+  });
+
+  it("adds a ready-action card to self that can later be consumed into the prepared pile", () => {
+    const store = createStartedGame(createAddCardToHandCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const stealthCard: CardInstance = {
+      instanceId: "test_stealth",
+      cardId: "stealth",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const observeCard: CardInstance = {
+      instanceId: "test_observe",
+      cardId: "observe",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 1;
+    state.zones.hand[playerId] = [stealthCard, observeCard];
+
+    const stealthEvents = store.playCard(playerId, stealthCard.instanceId);
+    const addedEvent = stealthEvents.find((event) => event.type === "CARD_ADDED_TO_HAND");
+    const hideCard = state.zones.hand[playerId].find((card) => card.cardId === "hide");
+
+    expect(addedEvent?.payload).toMatchObject({
+      playerId,
+      sourceId: stealthCard.instanceId,
+      privateCardData: { cardId: "hide" }
+    });
+    expect(hideCard).toBeDefined();
+
+    const observeEvents = store.playCard(playerId, observeCard.instanceId, undefined, [
+      hideCard!.instanceId
+    ]);
+
+    expect(observeEvents.find((event) => event.type === "CARD_CONSUMED")?.payload).toMatchObject({
+      cardInstanceId: hideCard!.instanceId,
+      cardId: "hide",
+      destinationZone: "PREPARED"
+    });
+    expect(hideCard!.zone).toBe("PREPARED");
+    expect(state.zones.prepared[playerId]).toContain(hideCard);
+  });
+
+  it("triggers an end-turn status effect while keeping its source card in hand", () => {
+    const store = createStartedGame(createIgnitedCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const ignitedCard: CardInstance = {
+      instanceId: "test_ignited_end_turn",
+      cardId: "ignited",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.zones.hand[playerId] = [ignitedCard];
+    state.zones.hand.p2 = [];
+    state.players.p2.drawPerTurn = 0;
+    state.players.p2.character!.abilityModifiers.dexterity = 0;
+
+    const events = store.endTurn(playerId);
+    const actionEvent = events.find((event) => event.type === "CARD_ACTION_TRIGGERED");
+    const addedEvents = events.filter((event) => event.type === "CARD_ADDED_TO_HAND");
+    const turnEndedEvent = events.find((event) => event.type === "TURN_ENDED");
+
+    expect(actionEvent?.payload).toMatchObject({
+      playerId,
+      cardInstanceId: ignitedCard.instanceId,
+      actionTag: "END_TURN_STATUS",
+      trigger: "TURN_ENDED",
+      destinationZone: "HAND",
+      targetId: playerId,
+      targetIds: [playerId]
+    });
+    expect(addedEvents).toHaveLength(3);
+    expect(addedEvents.every((event) =>
+      event.payload.playerId === playerId && event.payload.privateCardData?.cardId === "burn"
+    )).toBe(true);
+    expect(turnEndedEvent?.seq).toBeGreaterThan(addedEvents[2]?.seq ?? 0);
+    expect(ignitedCard.zone).toBe("HAND");
+    expect(state.zones.hand[playerId]).toContain(ignitedCard);
+    expect(state.zones.hand[playerId].filter((card) => card.cardId === "burn")).toHaveLength(3);
+  });
+
+  it("exhausts an end-turn status played directly without triggering its effect", () => {
+    const store = createStartedGame(createIgnitedCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const ignitedCard: CardInstance = {
+      instanceId: "test_ignited_played",
+      cardId: "ignited",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].energy = 2;
+    state.zones.hand[playerId] = [ignitedCard];
+
+    const events = store.playCard(playerId, ignitedCard.instanceId);
+
+    expect(events.map((event) => event.type)).not.toContain("CARD_ADDED_TO_HAND");
+    expect(events.map((event) => event.type)).not.toContain("CARD_ACTION_TRIGGERED");
+    expect(events.find((event) => event.type === "CARD_RESOLVED")?.payload.destinationZone).toBe("EXHAUST");
+    expect(ignitedCard.zone).toBe("EXHAUST");
+    expect(state.zones.exhaust[playerId]).toContain(ignitedCard);
+  });
+
+  it("does not trigger an end-turn status effect after it is discarded", () => {
+    const store = createStartedGame(createIgnitedCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const ignitedCard: CardInstance = {
+      instanceId: "test_ignited_discarded",
+      cardId: "ignited",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].character!.abilityModifiers.intelligence = 0;
+    state.players[playerId].character!.abilityModifiers.constitution = 0;
+    state.zones.hand[playerId] = [ignitedCard];
+
+    expect(store.endTurn(playerId).map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
+
+    const events = store.discardCard(playerId, ignitedCard.instanceId);
+
+    expect(events.map((event) => event.type)).not.toContain("CARD_ADDED_TO_HAND");
+    expect(events.map((event) => event.type)).not.toContain("CARD_ACTION_TRIGGERED");
+    expect(ignitedCard.zone).toBe("EXHAUST");
+    expect(state.zones.hand[playerId]).toHaveLength(0);
+  });
+
   it("triggers a bonus action card effect for free when discarded during the main phase", () => {
     const store = createStartedGame(createBonusActionCatalog());
     const state = store.getState();
@@ -384,7 +760,8 @@ describe("card effects", () => {
     state.turnPhase = "DISCARD";
     state.pendingDiscard = {
       playerId,
-      retainCount: 0
+      retainCount: 0,
+      statusRetainCount: 0
     };
     state.players[playerId].energy = 0;
     state.zones.hand[playerId] = [card];
@@ -417,7 +794,11 @@ describe("card effects", () => {
 
     expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
     expect(state.turnPhase).toBe("DISCARD");
-    expect(state.pendingDiscard).toEqual({ playerId, retainCount: 0 });
+    expect(state.pendingDiscard).toEqual({
+      playerId,
+      retainCount: 0,
+      statusRetainCount: 0
+    });
     expect(state.zones.hand[playerId]).toContain(card);
 
     const discardEvents = store.discardCard(playerId, card.instanceId, targetId);
@@ -504,7 +885,11 @@ describe("card effects", () => {
       targetId: attackerId
     });
     expect(findResolvedEvent(events, reactionCard.instanceId)?.payload.destinationZone).toBe("EXHAUST");
-    expect(state.players[defenderId].hp).toBe(18);
+    expect(events.map((event) => event.type)).toContain("DAMAGE_PREVENTED");
+    expect(events.some((event) =>
+      event.type === "DAMAGE_APPLIED" && event.payload.sourceId === bonusCard.instanceId
+    )).toBe(false);
+    expect(state.players[defenderId].hp).toBe(20);
     expect(state.players[attackerId].hp).toBe(19);
     expect(reactionCard.zone).toBe("EXHAUST");
     expect(state.zones.prepared[defenderId]).not.toContain(reactionCard);
@@ -570,7 +955,11 @@ describe("card effects", () => {
       targetId: attackerId
     });
     expect(findResolvedEvent(events, reactionCard.instanceId)?.payload.destinationZone).toBe("EXHAUST");
-    expect(state.players[defenderId].hp).toBe(18);
+    expect(events.map((event) => event.type)).toContain("DAMAGE_PREVENTED");
+    expect(events.some((event) =>
+      event.type === "DAMAGE_APPLIED" && event.payload.sourceId === attackCard.instanceId
+    )).toBe(false);
+    expect(state.players[defenderId].hp).toBe(20);
     expect(state.players[attackerId].hp).toBe(19);
     expect(reactionCard.zone).toBe("EXHAUST");
     expect(state.zones.prepared[defenderId]).not.toContain(reactionCard);
@@ -723,6 +1112,44 @@ describe("card effects", () => {
     expect(state.zones.prepared[playerId]).toContain(readyResource);
     expect(state.zones.exhaust[playerId]).toContain(normalResource);
     expect(state.zones.temporary[playerId]).toContain(sourceCard);
+  });
+
+  it("rejects status cards selected for consumeCardCount without changing game state", () => {
+    const store = createStartedGame(createResourceCostCatalog());
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard: CardInstance = {
+      instanceId: "test_blood_rite",
+      cardId: "blood_rite",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const statusResource: CardInstance = {
+      instanceId: "test_bleeding_resource",
+      cardId: "bleeding",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+    const normalResource: CardInstance = {
+      instanceId: "test_dagger_resource",
+      cardId: "dagger_strike",
+      ownerId: playerId,
+      zone: "HAND"
+    };
+
+    state.players[playerId].hp = 10;
+    state.players[playerId].energy = 0;
+    state.zones.hand[playerId] = [sourceCard, statusResource, normalResource];
+
+    expect(() => store.playCard(playerId, sourceCard.instanceId, undefined, [
+      statusResource.instanceId,
+      normalResource.instanceId
+    ])).toThrow("Status cards cannot be consumed as additional card resources");
+
+    expect(state.players[playerId].hp).toBe(10);
+    expect(state.zones.hand[playerId]).toEqual([sourceCard, statusResource, normalResource]);
+    expect(state.zones.exhaust[playerId]).not.toContain(statusResource);
+    expect(state.zones.exhaust[playerId]).not.toContain(normalResource);
   });
 
   it("prepares a transformed ready-action card when it is consumed as a resource", () => {
@@ -1380,6 +1807,143 @@ function createBonusDrawResolutionCatalog(): CardCatalog {
   };
 }
 
+function createStatusCatalog(): CardCatalog {
+  return {
+    version: "status-test",
+    cardDefinitions: {
+      bleeding: {
+        cardId: "bleeding",
+        name: "出血",
+        cost: 9,
+        type: "STATUS",
+        description: "結算時失去 1 HP。",
+        effect: { type: "LOSE_HP", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      clumsy: {
+        cardId: "clumsy",
+        name: "笨拙",
+        cost: 4,
+        type: "STATUS",
+        description: "結算時若有剩餘能量，失去 1 點能量。",
+        effect: { type: "LOSE_ENERGY", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true
+      },
+      slime: {
+        cardId: "slime",
+        name: "黏液",
+        cost: 1,
+        type: "STATUS",
+        description: "結算時抽 1 張牌。",
+        effect: { type: "DRAW", count: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true
+      }
+    },
+    starterDeckCardIds: ["bleeding", "clumsy", "slime"],
+    transformRules: []
+  };
+}
+
+function createAddCardToHandCatalog(): CardCatalog {
+  return {
+    version: "add-card-to-hand-test",
+    cardDefinitions: {
+      sneak_attack: {
+        cardId: "sneak_attack",
+        name: "偷襲",
+        cost: 1,
+        type: "ATTACK",
+        description: "使目標獲得 2 張出血。",
+        effect: { type: "ADD_CARD_TO_HAND", cardId: "bleeding", count: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      stealth: {
+        cardId: "stealth",
+        name: "隱匿",
+        cost: 1,
+        type: "SKILL",
+        description: "獲得 1 張躲藏。",
+        effect: { type: "ADD_CARD_TO_HAND", cardId: "hide", count: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      bleeding: {
+        cardId: "bleeding",
+        name: "出血",
+        cost: 9,
+        type: "STATUS",
+        description: "結算時失去 1 HP。",
+        effect: { type: "LOSE_HP", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      hide: {
+        cardId: "hide",
+        name: "躲藏",
+        cost: 1,
+        type: "SKILL",
+        description: "準備躲藏。",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        actionTags: [{
+          type: "READY_ACTION",
+          label: "準備動作",
+          trigger: "TURN_STARTED"
+        }]
+      },
+      observe: {
+        cardId: "observe",
+        name: "觀察",
+        cost: 0,
+        type: "SKILL",
+        description: "消耗 1 張牌。",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        resourceCosts: {
+          consumeCardCount: 1
+        }
+      }
+    },
+    starterDeckCardIds: ["sneak_attack", "stealth", "bleeding", "hide", "observe"],
+    transformRules: []
+  };
+}
+
+function createIgnitedCatalog(): CardCatalog {
+  return {
+    version: "ignited-test",
+    cardDefinitions: {
+      ignited: {
+        cardId: "ignited",
+        name: "點燃",
+        cost: 2,
+        type: "STATUS",
+        description: "回合結束時加入 3 張灼傷。",
+        effect: { type: "ADD_CARD_TO_HAND", cardId: "burn", count: 3 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true,
+        actionTags: [{
+          type: "END_TURN_STATUS",
+          label: "回合結束時觸發其他狀態",
+          trigger: "TURN_ENDED"
+        }]
+      },
+      burn: {
+        cardId: "burn",
+        name: "灼傷",
+        cost: 1,
+        type: "STATUS",
+        description: "結算時失去 1 HP。",
+        effect: { type: "LOSE_HP", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true
+      }
+    },
+    starterDeckCardIds: ["ignited", "burn"],
+    transformRules: []
+  };
+}
+
 function createBonusPreparedActionCatalog(): CardCatalog {
   const bonusCatalog = createBonusActionCatalog();
   const preparedCatalog = createPreparedActionCatalog();
@@ -1423,9 +1987,18 @@ function createResourceCostCatalog(): CardCatalog {
         effect: { type: "DAMAGE", value: 1 },
         targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
       },
+      bleeding: {
+        cardId: "bleeding",
+        name: "出血",
+        cost: 9,
+        type: "STATUS",
+        description: "結算時失去 1 HP。",
+        effect: { type: "LOSE_HP", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
       stored_blessing: preparedCatalog.cardDefinitions.stored_blessing
     },
-    starterDeckCardIds: ["blood_rite", "dagger_strike", "stored_blessing"],
+    starterDeckCardIds: ["blood_rite", "dagger_strike", "bleeding", "stored_blessing"],
     transformRules: []
   };
 }
@@ -1563,6 +2136,30 @@ function createPreparedActionCatalog(): CardCatalog {
         effect: { type: "DAMAGE", value: 2 },
         targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
       },
+      combo: {
+        cardId: "combo",
+        name: "Combo",
+        cost: 2,
+        type: "ATTACK",
+        description: "Deal 3 damage twice.",
+        effect: { type: "DAMAGE", value: 3, count: 2 },
+        targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+      },
+      hide: {
+        cardId: "hide",
+        name: "Hide",
+        cost: 1,
+        type: "SKILL",
+        description: "Prevent one incoming damage hit.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+        consumable: true,
+        actionTags: [{
+          type: "REACTION_ACTION",
+          label: "反應動作",
+          trigger: "DAMAGE_TARGETED"
+        }]
+      },
       hex: {
         cardId: "hex",
         name: "Hex",
@@ -1573,7 +2170,16 @@ function createPreparedActionCatalog(): CardCatalog {
         targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
       }
     },
-    starterDeckCardIds: ["riposte", "counter_jab", "guarded_recovery", "stored_blessing", "firebolt", "hex"],
+    starterDeckCardIds: [
+      "riposte",
+      "counter_jab",
+      "guarded_recovery",
+      "stored_blessing",
+      "firebolt",
+      "combo",
+      "hide",
+      "hex"
+    ],
     transformRules: []
   };
 }

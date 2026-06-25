@@ -100,6 +100,7 @@ Client 只能送出意圖，例如「我想使用 card_inst_001 攻擊 target_00
 - CARD_PLAYED
 - CARD_DISCARDED
 - DAMAGE_APPLIED
+- DAMAGE_PREVENTED
 - TURN_STARTED
 - TURN_ENDED
 

@@ -13,9 +13,12 @@ export type CardZone =
 
 export type CardEffectDefinition =
   | { type: "NONE" }
-  | { type: "DAMAGE"; value: number }
+  | { type: "DAMAGE"; value: number; count?: number }
   | { type: "HEAL"; value: number }
-  | { type: "DRAW"; count: number };
+  | { type: "DRAW"; count: number }
+  | { type: "LOSE_HP"; value: number }
+  | { type: "LOSE_ENERGY"; value: number }
+  | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number };
 
 export type CardTargetSelection = "NONE" | "SINGLE" | "GROUP";
 
@@ -31,14 +34,16 @@ export type CardActionTagType =
   | "BONUS_ACTION"
   | "REACTION_ACTION"
   | "COUNTER_ACTION"
-  | "READY_ACTION";
+  | "READY_ACTION"
+  | "END_TURN_STATUS";
 
 export type CardActionTrigger =
   | "DISCARD"
   | "DAMAGE_TARGETED"
   | "SKILL_TARGETED"
   | "MAGE_TARGETED"
-  | "TURN_STARTED";
+  | "TURN_STARTED"
+  | "TURN_ENDED";
 
 export type CardActionTag = {
   type: CardActionTagType;

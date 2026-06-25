@@ -37,12 +37,21 @@ type CsvRecord = {
 };
 
 const CARD_TYPES = new Set(["ATTACK", "SKILL", "MAGE", "ITEM", "STATUS"]);
-const EFFECT_TYPES = new Set(["NONE", "DAMAGE", "HEAL", "DRAW"]);
+const EFFECT_TYPES = new Set([
+  "NONE",
+  "DAMAGE",
+  "HEAL",
+  "DRAW",
+  "LOSE_HP",
+  "LOSE_ENERGY",
+  "ADD_CARD_TO_HAND"
+]);
 const ACTION_TAG_TYPES = new Set([
   "BONUS_ACTION",
   "REACTION_ACTION",
   "COUNTER_ACTION",
-  "READY_ACTION"
+  "READY_ACTION",
+  "END_TURN_STATUS"
 ]);
 const TARGET_SELECTIONS = new Set(["NONE", "SINGLE", "GROUP"]);
 const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
@@ -118,6 +127,8 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     cardDefinitions[cardId] = parsedDefinition;
   }
 
+  validateEffectCardReferences(cardDefinitions, `${source}.cardDefinitions`);
+
   const starterDeckCardIds = starterDeckValue.map((rawCardId, index) => {
     const cardId = readRequiredString(rawCardId, `starterDeckCardIds[${index}]`, source);
     if (!cardDefinitions[cardId]) {
@@ -184,6 +195,8 @@ function parseCardsCsv(csvText: string): Record<string, CardDefinition> {
   if (Object.keys(cardDefinitions).length === 0) {
     throw new Error("cards.csv must contain at least one enabled card.");
   }
+
+  validateEffectCardReferences(cardDefinitions, "cards.csv");
 
   return cardDefinitions;
 }
@@ -504,6 +517,24 @@ function parseEffect(record: Record<string, unknown>, source: string): CardEffec
     };
   }
 
+  if (effectType === "ADD_CARD_TO_HAND") {
+    const rawCount = readOptionalString(record.effectCount) || readOptionalString(record.effectValue);
+    return {
+      type: "ADD_CARD_TO_HAND",
+      cardId: readRequiredString(record.effectCardId ?? record.addCardId, "effectCardId", source),
+      count: parseInteger(rawCount, "effectCount", source, 1)
+    };
+  }
+
+  if (effectType === "DAMAGE") {
+    const count = parseOptionalInteger(record.effectCount, "effectCount", source, 1);
+    return {
+      type: "DAMAGE",
+      value: parseInteger(record.effectValue, "effectValue", source, 0),
+      ...(count === undefined ? {} : { count })
+    };
+  }
+
   return {
     type: effectType,
     value: parseInteger(record.effectValue, "effectValue", source, 0)
@@ -522,6 +553,23 @@ function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
     return {
       type: "DRAW",
       count: parseInteger(record.count, "count", source, 1)
+    };
+  }
+
+  if (effectType === "ADD_CARD_TO_HAND") {
+    return {
+      type: "ADD_CARD_TO_HAND",
+      cardId: readRequiredString(record.cardId, "cardId", source),
+      count: parseInteger(record.count, "count", source, 1)
+    };
+  }
+
+  if (effectType === "DAMAGE") {
+    const count = parseOptionalInteger(record.count, "count", source, 1);
+    return {
+      type: "DAMAGE",
+      value: parseInteger(record.value, "value", source, 0),
+      ...(count === undefined ? {} : { count })
     };
   }
 
@@ -613,6 +661,12 @@ function createActionTag(type: CardActionTagType): CardActionTag {
         label: "準備動作",
         trigger: "TURN_STARTED"
       };
+    case "END_TURN_STATUS":
+      return {
+        type,
+        label: "回合結束時觸發其他狀態",
+        trigger: "TURN_ENDED"
+      };
   }
 }
 
@@ -701,6 +755,64 @@ function validateTransformRule(
   return rule;
 }
 
+function validateEffectCardReferences(
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): void {
+  for (const definition of Object.values(cardDefinitions)) {
+    const endTurnStatusTag = definition.actionTags?.find(
+      (tag) => tag.type === "END_TURN_STATUS"
+    );
+
+    if (endTurnStatusTag) {
+      if ((definition.actionTags?.length ?? 0) > 1) {
+        throw new Error(
+          `${source} card "${definition.cardId}" END_TURN_STATUS cannot be combined with other action tags.`
+        );
+      }
+
+      if (definition.type !== "STATUS") {
+        throw new Error(`${source} card "${definition.cardId}" END_TURN_STATUS requires type STATUS.`);
+      }
+
+      if (definition.effect.type !== "ADD_CARD_TO_HAND") {
+        throw new Error(
+          `${source} card "${definition.cardId}" END_TURN_STATUS requires an ADD_CARD_TO_HAND effect.`
+        );
+      }
+
+      if (
+        definition.targeting.selection !== "NONE" ||
+        definition.targeting.scope !== "SELF" ||
+        definition.targeting.requiresTarget
+      ) {
+        throw new Error(
+          `${source} card "${definition.cardId}" END_TURN_STATUS must target SELF without manual selection.`
+        );
+      }
+    }
+
+    if (
+      definition.effect.type === "ADD_CARD_TO_HAND" &&
+      !cardDefinitions[definition.effect.cardId]
+    ) {
+      throw new Error(
+        `${source} card "${definition.cardId}" effect.cardId references unknown cardId "${definition.effect.cardId}".`
+      );
+    }
+
+    if (
+      endTurnStatusTag &&
+      definition.effect.type === "ADD_CARD_TO_HAND" &&
+      cardDefinitions[definition.effect.cardId]?.type !== "STATUS"
+    ) {
+      throw new Error(
+        `${source} card "${definition.cardId}" END_TURN_STATUS effect.cardId must reference a STATUS card.`
+      );
+    }
+  }
+}
+
 function parseCardType(value: unknown, source: string): CardType {
   const cardType = readRequiredString(value, "type", source).toUpperCase();
 
@@ -716,13 +828,42 @@ function parseEffectType(
   field: string,
   source: string
 ): CardEffectDefinition["type"] {
-  const effectType = readRequiredString(value, field, source).toUpperCase();
+  const effectType = normalizeEffectType(
+    readRequiredString(value, field, source).toUpperCase().replaceAll("-", "_").replaceAll(" ", "_")
+  );
 
   if (!EFFECT_TYPES.has(effectType)) {
-    throw new Error(`${source} ${field} must be NONE, DAMAGE, HEAL, or DRAW.`);
+    throw new Error(
+      `${source} ${field} must be NONE, DAMAGE, HEAL, DRAW, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND.`
+    );
   }
 
   return effectType as CardEffectDefinition["type"];
+}
+
+function normalizeEffectType(value: string): string {
+  switch (value) {
+    case "HP_LOSS":
+    case "LOSE_HEALTH":
+    case "HEALTH_LOSS":
+    case "失去HP":
+    case "失去生命":
+    case "失去生命值":
+      return "LOSE_HP";
+    case "ENERGY_LOSS":
+    case "LOSE_ENERGY":
+    case "SPEND_ENERGY":
+    case "CONSUME_ENERGY":
+    case "失去能量":
+    case "消耗能量":
+      return "LOSE_ENERGY";
+    case "ADD_TO_HAND":
+    case "CREATE_CARD_IN_HAND":
+    case "加入手牌":
+      return "ADD_CARD_TO_HAND";
+    default:
+      return value;
+  }
 }
 
 function parseActionTagType(value: unknown, field: string, source: string): CardActionTagType {
@@ -730,7 +871,9 @@ function parseActionTagType(value: unknown, field: string, source: string): Card
   const normalizedType = normalizeActionTagType(rawType);
 
   if (!ACTION_TAG_TYPES.has(normalizedType)) {
-    throw new Error(`${source} ${field} must be BONUS_ACTION, REACTION_ACTION, COUNTER_ACTION, or READY_ACTION.`);
+    throw new Error(
+      `${source} ${field} must be BONUS_ACTION, REACTION_ACTION, COUNTER_ACTION, READY_ACTION, or END_TURN_STATUS.`
+    );
   }
 
   return normalizedType as CardActionTagType;
@@ -752,6 +895,10 @@ function normalizeActionTagType(value: string): string {
     case "PREPARE":
     case "PREPARED_ACTION":
       return "READY_ACTION";
+    case "回合結束時觸發其他狀態":
+    case "TURN_END_STATUS":
+    case "END_TURN_TRIGGER":
+      return "END_TURN_STATUS";
     default:
       return value;
   }

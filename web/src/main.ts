@@ -3,6 +3,7 @@ import {
   getCardTargeting,
   getSelectableTargetIds
 } from "../../src/shared/rules/cardTargets";
+import { canUseCardForConsumeCost } from "../../src/shared/rules/cardResources";
 import {
   CREATION_ABILITY_MIN,
   CREATION_POINT_BUDGET,
@@ -11,6 +12,7 @@ import {
   calculateCreationPointSpend,
   validateAndCreateCharacter
 } from "../../src/shared/rules/characterRules";
+import { calculateHandDiscardRequirements } from "../../src/shared/rules/handRetention";
 import type { CardDefinition, CardTargeting, VisibleCardInstance } from "../../src/shared/types/card";
 import {
   ABILITY_KEYS,
@@ -740,8 +742,9 @@ function renderCard(card: VisibleCardInstance): string {
   const showDiscardButton = canDiscardFromHand();
   const triggersBonusDiscard = canTriggerBonusDiscard(visibleCard);
   const isDiscardTargetBlocked = triggersBonusDiscard && targeting.requiresTarget && getPotentialTargetIds(targeting).length === 0;
+  const isDiscardTypeBlocked = !canDiscardCardType(visibleCard);
   const discardButton = showDiscardButton
-    ? `<button type="button" data-discard="${visibleCard.instanceId}" ${isDiscardTargetBlocked ? "disabled" : ""}>Discard</button>`
+    ? `<button type="button" data-discard="${visibleCard.instanceId}" ${isDiscardTargetBlocked || isDiscardTypeBlocked ? "disabled" : ""}>Discard</button>`
     : "";
 
   return `
@@ -948,6 +951,25 @@ function canDiscardFromHand(): boolean {
     localState.turnPhase === "DISCARD" &&
     localState.pendingDiscard?.playerId === playerId
   );
+}
+
+function canDiscardCardType(card: VisibleCardInstance): boolean {
+  if (!canDiscardFromHand() || !localState || !playerId || !localState.pendingDiscard) {
+    return false;
+  }
+
+  const hand = (localState.zones.hand[playerId] ?? []).map(hydrateVisibleCard);
+  const statusCardCount = hand.filter((candidate) => candidate.type === "STATUS").length;
+  const requirements = calculateHandDiscardRequirements({
+    retainCount: localState.pendingDiscard.retainCount,
+    statusRetainCount: localState.pendingDiscard.statusRetainCount,
+    statusCardCount,
+    nonStatusCardCount: hand.length - statusCardCount
+  });
+
+  return requirements.phase === "STATUS"
+    ? card.type === "STATUS"
+    : requirements.phase === "NON_STATUS" && card.type !== "STATUS";
 }
 
 function getLocalPlayer() {
@@ -1282,7 +1304,10 @@ function resourceCardCandidates(cardInstanceId: string): VisibleCardInstance[] {
   }
 
   return (localState.zones.hand[playerId] ?? [])
-    .filter((candidate) => candidate.instanceId !== cardInstanceId);
+    .map(hydrateVisibleCard)
+    .filter((candidate) =>
+      candidate.instanceId !== cardInstanceId && canUseCardForConsumeCost(candidate)
+    );
 }
 
 function hasEnoughConsumableResourceCards(card: VisibleCardInstance): boolean {

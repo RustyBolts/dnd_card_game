@@ -7,6 +7,7 @@ export type TurnPhase = "WAITING" | "MAIN" | "DISCARD";
 export type PendingDiscardState = {
   playerId: string;
   retainCount: number;
+  statusRetainCount: number;
 };
 
 export type PlayerState = {

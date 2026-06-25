@@ -137,6 +137,19 @@ export type CardDrawnEvent = {
   };
 };
 
+export type CardAddedToHandEvent = {
+  type: "CARD_ADDED_TO_HAND";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceId?: string;
+    cardInstanceId: string;
+    privateCardData?: {
+      cardId: string;
+    };
+  };
+};
+
 export type DeckRecycledEvent = {
   type: "DECK_RECYCLED";
   seq: number;
@@ -195,6 +208,28 @@ export type HpPaidEvent = {
   };
 };
 
+export type HpLostEvent = {
+  type: "HP_LOST";
+  seq: number;
+  payload: {
+    sourceId: string;
+    targetId: string;
+    amount: number;
+    hpAfter: number;
+  };
+};
+
+export type EnergyLostEvent = {
+  type: "ENERGY_LOST";
+  seq: number;
+  payload: {
+    sourceId: string;
+    targetId: string;
+    amount: number;
+    energyAfter: number;
+  };
+};
+
 export type CardActionTriggeredEvent = {
   type: "CARD_ACTION_TRIGGERED";
   seq: number;
@@ -229,6 +264,7 @@ export type DiscardPhaseStartedEvent = {
   payload: {
     playerId: string;
     retainCount: number;
+    statusRetainCount: number;
     discardCount: number;
   };
 };
@@ -256,6 +292,17 @@ export type DamageAppliedEvent = {
     targetId: string;
     amount: number;
     hpAfter: number;
+  };
+};
+
+export type DamagePreventedEvent = {
+  type: "DAMAGE_PREVENTED";
+  seq: number;
+  payload: {
+    sourceId: string;
+    targetId: string;
+    amount: number;
+    preventedByCardInstanceId: string;
   };
 };
 
@@ -324,16 +371,20 @@ export type GameEvent =
   | PlayerCharacterUpdatedEvent
   | GameStartedEvent
   | CardDrawnEvent
+  | CardAddedToHandEvent
   | DeckRecycledEvent
   | CardPlayedEvent
   | CardDiscardedEvent
   | CardConsumedEvent
   | HpPaidEvent
+  | HpLostEvent
+  | EnergyLostEvent
   | CardActionTriggeredEvent
   | CardResolvedEvent
   | DiscardPhaseStartedEvent
   | CardTransformedEvent
   | DamageAppliedEvent
+  | DamagePreventedEvent
   | HealAppliedEvent
   | TurnStartedEvent
   | TurnEndedEvent

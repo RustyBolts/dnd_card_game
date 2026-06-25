@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CardInstance } from "../src/shared/types/card.js";
+import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
 import { createStartedGame } from "./testUtils.js";
 
 describe("turn manager", () => {
@@ -43,12 +44,17 @@ describe("turn manager", () => {
         payload: {
           playerId: "p1",
           retainCount: 1,
+          statusRetainCount: 1,
           discardCount: 1
         }
       }
     ]);
     expect(state.turnPhase).toBe("DISCARD");
-    expect(state.pendingDiscard).toEqual({ playerId: "p1", retainCount: 1 });
+    expect(state.pendingDiscard).toEqual({
+      playerId: "p1",
+      retainCount: 1,
+      statusRetainCount: 1
+    });
     expect(state.currentPlayerId).toBe("p1");
 
     const discardEvents = store.discardCard("p1", discardCard.instanceId);
@@ -80,7 +86,11 @@ describe("turn manager", () => {
 
     expect(endEvents.map((event) => event.type)).toEqual(["DISCARD_PHASE_STARTED"]);
     expect(state.turnPhase).toBe("DISCARD");
-    expect(state.pendingDiscard).toEqual({ playerId: "p1", retainCount: 0 });
+    expect(state.pendingDiscard).toEqual({
+      playerId: "p1",
+      retainCount: 0,
+      statusRetainCount: 0
+    });
     expect(state.zones.hand.p1).toEqual([discardCard]);
 
     const discardEvents = store.discardCard("p1", discardCard.instanceId);
@@ -105,6 +115,111 @@ describe("turn manager", () => {
     expect(state.currentPlayerId).toBe("p1");
     expect(state.players.p1.maxEnergy).toBe(3);
     expect(state.players.p1.energy).toBe(5);
+  });
+
+  it("uses status cards before non-status cards when applying intelligence retention", () => {
+    const store = createStartedGame(createRetentionCatalog());
+    const state = store.getState();
+    const statusCard = createCard("status_1", "bleeding", "p1");
+    const firstNormalCard = createCard("normal_1", "strike", "p1");
+    const secondNormalCard = createCard("normal_2", "strike", "p1");
+    state.players.p1.character!.abilityModifiers.intelligence = 2;
+    state.players.p1.character!.abilityModifiers.constitution = 0;
+    state.zones.hand.p1 = [statusCard, firstNormalCard, secondNormalCard];
+
+    const endEvents = store.endTurn("p1");
+
+    expect(endEvents[0]).toMatchObject({
+      type: "DISCARD_PHASE_STARTED",
+      payload: {
+        retainCount: 2,
+        statusRetainCount: 2,
+        discardCount: 1
+      }
+    });
+    expect(() => store.discardCard("p1", statusCard.instanceId)).toThrow(
+      "Discard the required non-status cards"
+    );
+
+    const discardEvents = store.discardCard("p1", firstNormalCard.instanceId);
+
+    expect(discardEvents.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.zones.hand.p1).toEqual([statusCard, secondNormalCard]);
+  });
+
+  it("uses a positive constitution modifier only for additional status cards", () => {
+    const store = createStartedGame(createRetentionCatalog());
+    const state = store.getState();
+    state.players.p1.character!.abilityModifiers.intelligence = 2;
+    state.players.p1.character!.abilityModifiers.constitution = 1;
+    state.zones.hand.p1 = [
+      createCard("status_1", "bleeding", "p1"),
+      createCard("status_2", "bleeding", "p1"),
+      createCard("status_3", "bleeding", "p1")
+    ];
+
+    const events = store.endTurn("p1");
+
+    expect(events.map((event) => event.type)).not.toContain("DISCARD_PHASE_STARTED");
+    expect(events.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.zones.hand.p1).toHaveLength(3);
+  });
+
+  it("does not use constitution retention for non-status cards", () => {
+    const store = createStartedGame(createRetentionCatalog());
+    const state = store.getState();
+    state.players.p1.character!.abilityModifiers.intelligence = 2;
+    state.players.p1.character!.abilityModifiers.constitution = 3;
+    state.zones.hand.p1 = [
+      createCard("normal_1", "strike", "p1"),
+      createCard("normal_2", "strike", "p1"),
+      createCard("normal_3", "strike", "p1")
+    ];
+
+    const events = store.endTurn("p1");
+
+    expect(events[0]).toMatchObject({
+      type: "DISCARD_PHASE_STARTED",
+      payload: {
+        retainCount: 2,
+        statusRetainCount: 5,
+        discardCount: 1
+      }
+    });
+  });
+
+  it("unlocks status discards after required non-status discards are complete", () => {
+    const store = createStartedGame(createRetentionCatalog());
+    const state = store.getState();
+    const normalCard = createCard("normal_1", "strike", "p1");
+    const statusCards = [1, 2, 3, 4].map((index) =>
+      createCard(`status_${index}`, "bleeding", "p1")
+    );
+    state.players.p1.character!.abilityModifiers.intelligence = 2;
+    state.players.p1.character!.abilityModifiers.constitution = 1;
+    state.zones.hand.p1 = [normalCard, ...statusCards];
+
+    const endEvents = store.endTurn("p1");
+
+    expect(endEvents[0]).toMatchObject({
+      type: "DISCARD_PHASE_STARTED",
+      payload: {
+        retainCount: 2,
+        statusRetainCount: 3,
+        discardCount: 2
+      }
+    });
+    expect(() => store.discardCard("p1", statusCards[0].instanceId)).toThrow(
+      "Discard the required non-status cards"
+    );
+
+    const normalDiscardEvents = store.discardCard("p1", normalCard.instanceId);
+    expect(normalDiscardEvents.map((event) => event.type)).not.toContain("TURN_ENDED");
+
+    const statusDiscardEvents = store.discardCard("p1", statusCards[0].instanceId);
+    expect(statusDiscardEvents.map((event) => event.type)).toContain("HP_LOST");
+    expect(statusDiscardEvents.map((event) => event.type)).toContain("TURN_ENDED");
+    expect(state.zones.hand.p1).toEqual(statusCards.slice(1));
   });
 
   it("recycles only the temporary pile into the deck when drawing from an empty deck", () => {
@@ -140,5 +255,33 @@ function createCard(
     cardId,
     ownerId,
     zone
+  };
+}
+
+function createRetentionCatalog(): CardCatalog {
+  return {
+    version: "retention-test",
+    cardDefinitions: {
+      strike: {
+        cardId: "strike",
+        name: "Strike",
+        cost: 1,
+        type: "ATTACK",
+        description: "No effect.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      bleeding: {
+        cardId: "bleeding",
+        name: "出血",
+        cost: 9,
+        type: "STATUS",
+        description: "結算時失去 1 HP。",
+        effect: { type: "LOSE_HP", value: 1 },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      }
+    },
+    starterDeckCardIds: ["strike", "strike", "strike", "strike", "strike", "strike"],
+    transformRules: []
   };
 }

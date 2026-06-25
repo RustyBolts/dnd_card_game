@@ -85,6 +85,50 @@ describe("card catalog data source", () => {
     expect(jsonCatalog.cardDefinitions.scroll_burst.consumable).toBe(true);
   });
 
+  it("parses DAMAGE effectCount as the number of damage hits", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+        "combo,連擊,2,ATTACK,對一名目標造成 2 次 3 點傷害。,DAMAGE,3,2,SINGLE,ENEMY,true,true\n",
+      starterDeckCsv: "cardId,count\ncombo,1\n",
+      version: "damage-count-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "damage-count-json",
+      cardDefinitions: {
+        combo: {
+          cardId: "combo",
+          name: "連擊",
+          cost: 2,
+          type: "ATTACK",
+          description: "對一名目標造成 2 次 3 點傷害。",
+          effect: { type: "DAMAGE", value: 3, count: 2 },
+          targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+        }
+      },
+      starterDeckCardIds: ["combo"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.combo.effect).toEqual({
+      type: "DAMAGE",
+      value: 3,
+      count: 2
+    });
+    expect(jsonCatalog.cardDefinitions.combo.effect).toEqual({
+      type: "DAMAGE",
+      value: 3,
+      count: 2
+    });
+
+    expect(() => parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,enabled\n" +
+        "invalid_combo,Invalid Combo,1,ATTACK,Invalid.,DAMAGE,3,0,true\n",
+      starterDeckCsv: "cardId,count\ninvalid_combo,1\n",
+      version: "invalid-damage-count"
+    })).toThrow(/effectCount must be an integer >= 1/);
+  });
+
   it("parses optional resource costs from CSV and JSON catalogs", () => {
     const csvCatalog = parseCardCatalogFromCsv({
       cardsCsv:
@@ -121,6 +165,152 @@ describe("card catalog data source", () => {
       consumeCardCount: 2,
       hp: 3
     });
+  });
+
+  it("parses status card HP and energy loss effects from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,consumable,enabled\n" +
+        "bleeding,出血,9,STATUS,結算時失去 1 HP。,LOSE_HP,1,,NONE,SELF,false,,true\n" +
+        "clumsy,笨拙,4,STATUS,結算時失去 1 點能量。,ENERGY_LOSS,1,,NONE,SELF,false,true,true\n",
+      starterDeckCsv: "cardId,count\nbleeding,1\nclumsy,1\n",
+      version: "status-effects-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "status-effects-json",
+      cardDefinitions: {
+        bleeding: {
+          cardId: "bleeding",
+          name: "出血",
+          cost: 9,
+          type: "STATUS",
+          description: "結算時失去 1 HP。",
+          effect: { type: "HP_LOSS", value: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        },
+        clumsy: {
+          cardId: "clumsy",
+          name: "笨拙",
+          cost: 4,
+          type: "STATUS",
+          description: "結算時失去 1 點能量。",
+          effect: { type: "LOSE_ENERGY", value: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+          consumable: true
+        }
+      },
+      starterDeckCardIds: ["bleeding", "clumsy"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.bleeding.effect).toEqual({ type: "LOSE_HP", value: 1 });
+    expect(csvCatalog.cardDefinitions.clumsy.effect).toEqual({ type: "LOSE_ENERGY", value: 1 });
+    expect(csvCatalog.cardDefinitions.clumsy.consumable).toBe(true);
+    expect(jsonCatalog.cardDefinitions.bleeding.effect).toEqual({ type: "LOSE_HP", value: 1 });
+    expect(jsonCatalog.cardDefinitions.clumsy.effect).toEqual({ type: "LOSE_ENERGY", value: 1 });
+  });
+
+  it("parses add-card-to-hand effects and validates their card references", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardId,targetSelection,targetScope,targetRequired,enabled\n" +
+        "sneak_attack,偷襲,1,ATTACK,使目標獲得 2 張出血。,ADD_CARD_TO_HAND,,2,bleeding,SINGLE,ENEMY,true,true\n" +
+        "bleeding,出血,9,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,NONE,SELF,false,true\n",
+      starterDeckCsv: "cardId,count\nsneak_attack,1\n",
+      version: "add-card-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "add-card-json",
+      cardDefinitions: {
+        stealth: {
+          cardId: "stealth",
+          name: "隱匿",
+          cost: 1,
+          type: "SKILL",
+          description: "獲得 1 張躲藏。",
+          effect: { type: "ADD_TO_HAND", cardId: "hide", count: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        },
+        hide: {
+          cardId: "hide",
+          name: "躲藏",
+          cost: 1,
+          type: "SKILL",
+          description: "準備躲藏。",
+          effect: { type: "NONE" },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["stealth"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.sneak_attack.effect).toEqual({
+      type: "ADD_CARD_TO_HAND",
+      cardId: "bleeding",
+      count: 2
+    });
+    expect(jsonCatalog.cardDefinitions.stealth.effect).toEqual({
+      type: "ADD_CARD_TO_HAND",
+      cardId: "hide",
+      count: 1
+    });
+
+    expect(() => parseCardCatalogJson({
+      version: "bad-add-card-json",
+      cardDefinitions: {
+        stealth: {
+          cardId: "stealth",
+          name: "隱匿",
+          cost: 1,
+          type: "SKILL",
+          description: "獲得不存在的牌。",
+          effect: { type: "ADD_CARD_TO_HAND", cardId: "missing", count: 1 }
+        }
+      },
+      starterDeckCardIds: ["stealth"]
+    }, "catalog.json")).toThrow(/effect\.cardId references unknown cardId "missing"/);
+  });
+
+  it("parses and validates end-turn status action tags", () => {
+    const catalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardId,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled\n" +
+        "ignited,點燃,2,STATUS,回合結束時加入 3 張灼傷。,ADD_CARD_TO_HAND,,3,burn,NONE,SELF,false,true,,,回合結束時觸發其他狀態,true\n" +
+        "burn,灼傷,1,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,NONE,SELF,false,true,,,,true\n",
+      starterDeckCsv: "cardId,count\nignited,1\n",
+      version: "end-turn-status-csv"
+    });
+
+    expect(catalog.cardDefinitions.ignited.actionTags).toEqual([{
+      type: "END_TURN_STATUS",
+      label: "回合結束時觸發其他狀態",
+      trigger: "TURN_ENDED"
+    }]);
+
+    expect(() => parseCardCatalogJson({
+      version: "invalid-end-turn-status",
+      cardDefinitions: {
+        invalid_ignited: {
+          cardId: "invalid_ignited",
+          name: "Invalid Ignited",
+          cost: 2,
+          type: "SKILL",
+          description: "Wrong source type.",
+          effect: { type: "ADD_CARD_TO_HAND", cardId: "burn", count: 3 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false },
+          actionTags: ["END_TURN_STATUS"]
+        },
+        burn: {
+          cardId: "burn",
+          name: "Burn",
+          cost: 1,
+          type: "STATUS",
+          description: "Lose 1 HP.",
+          effect: { type: "LOSE_HP", value: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["invalid_ignited"]
+    }, "catalog.json")).toThrow(/END_TURN_STATUS requires type STATUS/);
   });
 
   it("parses action tags from CSV and JSON catalogs", () => {
@@ -524,7 +714,7 @@ describe("card catalog data source", () => {
         starterDeckCsv: "cardId,count\nstance_shift,1\n",
         version: "old-transform-effect"
       })
-    ).toThrow(/effectType must be NONE, DAMAGE, HEAL, or DRAW/);
+    ).toThrow(/effectType must be NONE, DAMAGE, HEAL, DRAW, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND/);
   });
 
   it("normalizes Google Sheets published HTML URLs to CSV URLs", () => {

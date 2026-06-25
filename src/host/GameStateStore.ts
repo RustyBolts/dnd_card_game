@@ -1,20 +1,28 @@
 import { DEFAULT_CARD_CATALOG } from "../shared/rules/cardDefinitions.js";
 import { DEFAULT_RACES, validateAndCreateCharacter } from "../shared/rules/characterRules.js";
-import { resolveCardEffect, type EffectEvent } from "../shared/rules/cardEffects.js";
+import { resolveCardEffect, type BeforeDamageHitResult } from "../shared/rules/cardEffects.js";
+import { canUseCardForConsumeCost } from "../shared/rules/cardResources.js";
 import {
   getAutomaticTargetIds,
   getCardTargeting,
   getSelectableTargetIds,
   isPlayerTargetAllowed
 } from "../shared/rules/cardTargets.js";
+import {
+  calculateHandDiscardRequirements,
+  calculateStatusRetainCount,
+  type HandDiscardRequirements
+} from "../shared/rules/handRetention.js";
 import type { CardActionTag, CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
 import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
 import type { CharacterConfig, CharacterState, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
+  CardAddedToHandEvent,
   CardConsumedEvent,
   CardDrawnEvent,
   CardActionTriggeredEvent,
+  DamagePreventedEvent,
   CardResolvedEvent,
   CardTransformedEvent,
   DeckRecycledEvent,
@@ -45,7 +53,6 @@ type PreparedActionTriggerContext = {
   sourcePlayerId: string;
   sourceDefinition: CardDefinition;
   targetIds: string[];
-  effectEvents: EffectEvent[];
 };
 
 type ConsumedCardPayment = {
@@ -371,14 +378,17 @@ export class GameStateStore {
 
     const { card, index } = this.findCardInHand(playerId, cardInstanceId);
     const definition = this.getCardDefinition(card.cardId);
+    this.assertPendingDiscardCardAllowed(playerId, definition);
     const actionTag = this.getTriggeredDiscardActionTag(definition);
-    const actionTargetIds = actionTag
+    const resolvesStatus = this.shouldResolveStatusOnDiscard(definition);
+    const shouldResolveDiscard = Boolean(actionTag || resolvesStatus);
+    const actionTargetIds = shouldResolveDiscard
       ? this.resolveActionTargetIds(definition, playerId, targetId)
       : [];
 
     this.state.zones.hand[playerId].splice(index, 1);
     const revertEvents = this.revertPendingCardTransformForLeavingHand(playerId, card);
-    const destinationZone = actionTag
+    const destinationZone = shouldResolveDiscard
       ? this.moveCardToResolving(card)
       : this.moveCardToTemporary(card);
 
@@ -394,10 +404,28 @@ export class GameStateStore {
           destinationZone
         }
       },
-      ...(actionTag
-        ? this.resolveTriggeredActionEvents(playerId, card, definition, actionTag, actionTargetIds)
-        : [])
     ];
+
+    if (actionTag) {
+      events.push(
+        ...this.resolveTriggeredActionEvents(
+          playerId,
+          card,
+          definition,
+          actionTag,
+          actionTargetIds,
+          this.getDiscardResolutionDestinationZone(definition)
+        )
+      );
+    } else if (resolvesStatus) {
+      events.push(
+        ...this.resolveCardFromResolving(playerId, card, definition, actionTargetIds, {
+          finalDestinationZone: this.getDiscardResolutionDestinationZone(definition),
+          triggerPreparedActions: true,
+          revertSourceForLeavingHand: false
+        })
+      );
+    }
 
     if (
       this.state.status !== "ENDED" &&
@@ -577,13 +605,15 @@ export class GameStateStore {
 
   private startDiscardOrCompleteTurn(playerId: string): GameEvent[] {
     const retainCount = this.resolveHandRetainCount(this.state.players[playerId]);
-    const handCount = this.state.zones.hand[playerId]?.length ?? 0;
+    const statusRetainCount = this.resolveStatusHandRetainCount(this.state.players[playerId], retainCount);
+    const requirements = this.resolveHandDiscardRequirements(playerId, retainCount, statusRetainCount);
 
-    if (handCount > retainCount) {
+    if (requirements.discardCount > 0) {
       this.state.turnPhase = "DISCARD";
       this.state.pendingDiscard = {
         playerId,
-        retainCount
+        retainCount,
+        statusRetainCount
       };
 
       return [
@@ -593,77 +623,29 @@ export class GameStateStore {
           payload: {
             playerId,
             retainCount,
-            discardCount: handCount - retainCount
+            statusRetainCount,
+            discardCount: requirements.discardCount
           }
         }
       ];
     }
 
-    const events = this.discardHandDownToRetainCount(playerId, retainCount);
-    if (this.state.status !== "ENDED") {
-      events.push(...this.completeTurn(playerId));
-    }
-    return events;
-  }
-
-  private discardHandDownToRetainCount(playerId: string, retainCount: number): GameEvent[] {
-    const hand = this.state.zones.hand[playerId] ?? [];
-    const events: GameEvent[] = [];
-
-    while (hand.length > retainCount) {
-      const card = hand.shift();
-      if (!card) {
-        break;
-      }
-
-      const definition = this.getCardDefinition(card.cardId);
-      const actionTag = this.getTriggeredDiscardActionTag(definition);
-      const actionTargetIds = actionTag
-        ? this.resolveAutomaticActionTargetIds(definition, playerId)
-        : null;
-      const shouldTriggerAction = Boolean(actionTag && actionTargetIds);
-
-      events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
-      const destinationZone = shouldTriggerAction
-        ? this.moveCardToResolving(card)
-        : this.moveCardToTemporary(card);
-      events.push({
-        type: "CARD_DISCARDED",
-        seq: this.nextSeq(),
-        payload: {
-          playerId,
-          cardInstanceId: card.instanceId,
-          cardId: card.cardId,
-          destinationZone
-        }
-      });
-
-      if (actionTag && actionTargetIds) {
-        events.push(...this.resolveTriggeredActionEvents(playerId, card, definition, actionTag, actionTargetIds));
-      }
-
-      if (this.state.status === "ENDED") {
-        break;
-      }
-    }
-
-    return events;
+    return this.completeTurn(playerId);
   }
 
   private completeTurn(playerId: string): GameEvent[] {
     this.state.turnPhase = "MAIN";
     this.state.pendingDiscard = null;
 
-    const events: GameEvent[] = [
-      {
-        type: "TURN_ENDED",
-        seq: this.nextSeq(),
-        payload: {
-          playerId,
-          turn: this.state.turn
-        }
+    const events: GameEvent[] = this.resolveEndTurnStatusTriggers(playerId);
+    events.push({
+      type: "TURN_ENDED",
+      seq: this.nextSeq(),
+      payload: {
+        playerId,
+        turn: this.state.turn
       }
-    ];
+    });
     events.push(...this.revertPendingCardTransforms(playerId, "TURN_END"));
 
     const currentIndex = this.state.playerOrder.indexOf(playerId);
@@ -682,13 +664,43 @@ export class GameStateStore {
       return false;
     }
 
-    return (this.state.zones.hand[playerId]?.length ?? 0) <= pendingDiscard.retainCount;
+    return this.resolveHandDiscardRequirements(
+      playerId,
+      pendingDiscard.retainCount,
+      pendingDiscard.statusRetainCount
+    ).discardCount === 0;
+  }
+
+  private resolveHandDiscardRequirements(
+    playerId: string,
+    retainCount: number,
+    statusRetainCount: number
+  ): HandDiscardRequirements {
+    const hand = this.state.zones.hand[playerId] ?? [];
+    const statusCardCount = hand.filter(
+      (card) => this.getCardDefinition(card.cardId).type === "STATUS"
+    ).length;
+
+    return calculateHandDiscardRequirements({
+      retainCount,
+      statusRetainCount,
+      statusCardCount,
+      nonStatusCardCount: hand.length - statusCardCount
+    });
   }
 
   private getTriggeredDiscardActionTag(definition: CardDefinition): CardActionTag | null {
     return definition.actionTags?.find(
       (tag) => tag.type === "BONUS_ACTION" && tag.trigger === "DISCARD"
     ) ?? null;
+  }
+
+  private shouldResolveStatusOnDiscard(definition: CardDefinition): boolean {
+    return definition.type === "STATUS";
+  }
+
+  private getDiscardResolutionDestinationZone(definition: CardDefinition): ResolvedCardDestinationZone {
+    return definition.type === "STATUS" ? this.getPlayedCardDestinationZone(definition) : "TEMPORARY";
   }
 
   private getPlayToPreparedActionTag(definition: CardDefinition): CardActionTag | null {
@@ -708,6 +720,42 @@ export class GameStateStore {
 
   private getReadyActionTag(definition: CardDefinition): CardActionTag | null {
     return definition.actionTags?.find((tag) => tag.type === "READY_ACTION") ?? null;
+  }
+
+  private getEndTurnStatusActionTag(definition: CardDefinition): CardActionTag | null {
+    return definition.actionTags?.find((tag) => tag.type === "END_TURN_STATUS") ?? null;
+  }
+
+  private resolveEndTurnStatusTriggers(playerId: string): GameEvent[] {
+    const triggeringCards = [...(this.state.zones.hand[playerId] ?? [])]
+      .map((card) => ({ card, definition: this.getCardDefinition(card.cardId) }))
+      .filter(({ definition }) => Boolean(this.getEndTurnStatusActionTag(definition)));
+    const events: GameEvent[] = [];
+
+    for (const { card, definition } of triggeringCards) {
+      const actionTag = this.getEndTurnStatusActionTag(definition);
+      if (!actionTag) {
+        continue;
+      }
+
+      events.push({
+        type: "CARD_ACTION_TRIGGERED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          cardInstanceId: card.instanceId,
+          cardId: definition.cardId,
+          actionTag: actionTag.type,
+          trigger: actionTag.trigger,
+          destinationZone: "HAND",
+          targetId: playerId,
+          targetIds: [playerId]
+        }
+      });
+      events.push(...this.resolveCardEffectEvents(playerId, card, definition, [playerId]));
+    }
+
+    return events;
   }
 
   private resolvePreparedActionTriggers(context: PreparedActionTriggerContext): GameEvent[] {
@@ -768,13 +816,6 @@ export class GameStateStore {
     ownerId: string,
     context: PreparedActionTriggerContext
   ): CardActionTag["trigger"] | null {
-    if (actionTag.type === "REACTION_ACTION") {
-      const wasDamaged = context.effectEvents.some((event) =>
-        event.type === "DAMAGE_APPLIED" && event.payload.targetId === ownerId
-      );
-      return wasDamaged ? "DAMAGE_TARGETED" : null;
-    }
-
     if (actionTag.type === "COUNTER_ACTION") {
       if (!context.targetIds.includes(ownerId)) {
         return null;
@@ -851,6 +892,11 @@ export class GameStateStore {
       return card.preparedTargetIds ?? this.resolveAutomaticActionTargetIds(definition, playerId) ?? [];
     }
 
+    const automaticTargetIds = this.resolveAutomaticActionTargetIds(definition, playerId);
+    if (automaticTargetIds !== null) {
+      return automaticTargetIds;
+    }
+
     return [defaultTargetId];
   }
 
@@ -864,7 +910,7 @@ export class GameStateStore {
       return false;
     }
 
-    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
+    if (this.hasPlayerEffect(definition) && targetIds.length === 0) {
       return false;
     }
 
@@ -938,6 +984,12 @@ export class GameStateStore {
 
       const card = this.findCardInHand(playerId, resourceCardInstanceId).card;
       const consumedDefinition = this.getCardDefinition(card.cardId);
+      if (!canUseCardForConsumeCost(consumedDefinition)) {
+        throw new CommandError(
+          "INVALID_RESOURCE_COST",
+          "Status cards cannot be consumed as additional card resources."
+        );
+      }
       const preparedTargetIds = this.getReadyActionTag(consumedDefinition)
         ? this.resolveConsumedReadyActionTargetIds(playerId, consumedDefinition, resourceTargets[card.instanceId])
         : undefined;
@@ -1056,7 +1108,7 @@ export class GameStateStore {
     }
 
     const targetIds = getAutomaticTargetIds(this.state, playerId, targeting);
-    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
+    if (this.hasPlayerEffect(definition) && targetIds.length === 0) {
       return null;
     }
 
@@ -1078,7 +1130,8 @@ export class GameStateStore {
     card: CardInstance,
     definition: CardDefinition,
     actionTag: CardActionTag,
-    targetIds: string[]
+    targetIds: string[],
+    finalDestinationZone: ResolvedCardDestinationZone = "TEMPORARY"
   ): GameEvent[] {
     const actionEvent: CardActionTriggeredEvent = {
       type: "CARD_ACTION_TRIGGERED",
@@ -1098,7 +1151,7 @@ export class GameStateStore {
     return [
       actionEvent,
       ...this.resolveCardFromResolving(playerId, card, definition, targetIds, {
-        finalDestinationZone: "TEMPORARY",
+        finalDestinationZone,
         triggerPreparedActions: true,
         revertSourceForLeavingHand: false
       })
@@ -1117,15 +1170,15 @@ export class GameStateStore {
     }
   ): GameEvent[] {
     const events: GameEvent[] = [];
-    const effectEvents = resolveCardEffect({
-      state: this.state,
-      sourceCard: card,
-      sourceDefinition: definition,
-      playerId,
-      targetIds,
-      nextSeq: () => this.nextSeq(),
-      drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count)
-    });
+    const effectEvents = this.getEndTurnStatusActionTag(definition)
+      ? []
+      : this.resolveCardEffectEvents(
+          playerId,
+          card,
+          definition,
+          targetIds,
+          options.triggerPreparedActions
+        );
 
     events.push(...effectEvents);
     if (options.triggerPreparedActions && this.state.status !== "ENDED") {
@@ -1133,8 +1186,7 @@ export class GameStateStore {
         ...this.resolvePreparedActionTriggers({
           sourcePlayerId: playerId,
           sourceDefinition: definition,
-          targetIds,
-          effectEvents
+          targetIds
         })
       );
     }
@@ -1147,8 +1199,108 @@ export class GameStateStore {
     return events;
   }
 
+  private resolveCardEffectEvents(
+    playerId: string,
+    card: CardInstance,
+    definition: CardDefinition,
+    targetIds: string[],
+    allowDamageReactions = false
+  ): GameEvent[] {
+    return resolveCardEffect({
+      state: this.state,
+      sourceCard: card,
+      sourceDefinition: definition,
+      playerId,
+      targetIds,
+      nextSeq: () => this.nextSeq(),
+      drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count),
+      addCardsToHand: (receivingPlayerId, cardId, count) =>
+        this.addCardsToHand(receivingPlayerId, cardId, count, card.instanceId),
+      beforeDamageHit: allowDamageReactions
+        ? (targetId, amount) => this.resolveDamageReaction(playerId, card, targetId, amount)
+        : undefined
+    });
+  }
+
+  private resolveDamageReaction(
+    sourcePlayerId: string,
+    sourceCard: CardInstance,
+    targetId: string,
+    amount: number
+  ): BeforeDamageHitResult {
+    if (sourcePlayerId === targetId) {
+      return { prevented: false, events: [] };
+    }
+
+    const reactionCard = (this.state.zones.prepared[targetId] ?? []).find((card) => {
+      const actionTag = this.getPreparedActionTag(this.getCardDefinition(card.cardId));
+      return actionTag?.type === "REACTION_ACTION";
+    });
+    if (!reactionCard) {
+      return { prevented: false, events: [] };
+    }
+
+    const definition = this.getCardDefinition(reactionCard.cardId);
+    const actionTag = this.getPreparedActionTag(definition);
+    if (!actionTag || actionTag.type !== "REACTION_ACTION") {
+      return { prevented: false, events: [] };
+    }
+
+    const events = this.resolvePreparedActionCard(
+      targetId,
+      reactionCard,
+      definition,
+      actionTag,
+      "DAMAGE_TARGETED",
+      sourcePlayerId
+    );
+    events.push({
+      type: "DAMAGE_PREVENTED",
+      seq: this.nextSeq(),
+      payload: {
+        sourceId: sourceCard.instanceId,
+        targetId,
+        amount,
+        preventedByCardInstanceId: reactionCard.instanceId
+      }
+    } satisfies DamagePreventedEvent);
+
+    return { prevented: true, events };
+  }
+
   private getPlayedCardDestinationZone(definition: CardDefinition): ResolvedCardDestinationZone {
     return definition.consumable ? "EXHAUST" : "TEMPORARY";
+  }
+
+  private addCardsToHand(
+    playerId: string,
+    cardId: string,
+    count: number,
+    sourceId: string
+  ): CardAddedToHandEvent[] {
+    this.assertKnownPlayer(playerId);
+    this.getCardDefinition(cardId);
+    const hand = this.state.zones.hand[playerId] ??= [];
+    const events: CardAddedToHandEvent[] = [];
+
+    for (let index = 0; index < count; index += 1) {
+      const card = this.deckManager.createCard(cardId, playerId, "HAND");
+      hand.push(card);
+      events.push({
+        type: "CARD_ADDED_TO_HAND",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          sourceId,
+          cardInstanceId: card.instanceId,
+          privateCardData: {
+            cardId
+          }
+        }
+      });
+    }
+
+    return events;
   }
 
   private moveCardToPrepared(card: CardInstance): CardZone {
@@ -1225,6 +1377,11 @@ export class GameStateStore {
 
   private resolveHandRetainCount(player: PlayerState): number {
     return Math.max(0, this.assertPlayerCharacter(player).abilityModifiers.intelligence);
+  }
+
+  private resolveStatusHandRetainCount(player: PlayerState, retainCount: number): number {
+    const constitutionModifier = this.assertPlayerCharacter(player).abilityModifiers.constitution;
+    return calculateStatusRetainCount(retainCount, constitutionModifier);
   }
 
   private applyTransformRules(playerId: string, triggerCard: CardInstance): CardTransformedEvent[] {
@@ -1468,9 +1625,19 @@ export class GameStateStore {
   }
 
   private assertEffectTargetsResolved(definition: CardDefinition, targetIds: string[]): void {
-    if ((definition.effect.type === "DAMAGE" || definition.effect.type === "HEAL") && targetIds.length === 0) {
+    if (this.hasPlayerEffect(definition) && targetIds.length === 0) {
       throw new CommandError("INVALID_TARGET", `${definition.name} cannot resolve an effect target.`);
     }
+  }
+
+  private hasPlayerEffect(definition: CardDefinition): boolean {
+    return (
+      definition.effect.type === "DAMAGE" ||
+      definition.effect.type === "HEAL" ||
+      definition.effect.type === "LOSE_HP" ||
+      definition.effect.type === "LOSE_ENERGY" ||
+      definition.effect.type === "ADD_CARD_TO_HAND"
+    );
   }
 
   private assertPlaying(): void {
@@ -1498,6 +1665,33 @@ export class GameStateStore {
 
     if (this.state.pendingDiscard?.playerId !== playerId) {
       throw new CommandError("DISCARD_REQUIRED", "Only the discarding player can discard cards now.");
+    }
+  }
+
+  private assertPendingDiscardCardAllowed(playerId: string, definition: CardDefinition): void {
+    const pendingDiscard = this.state.pendingDiscard;
+    if (this.state.turnPhase !== "DISCARD" || pendingDiscard?.playerId !== playerId) {
+      return;
+    }
+
+    const requirements = this.resolveHandDiscardRequirements(
+      playerId,
+      pendingDiscard.retainCount,
+      pendingDiscard.statusRetainCount
+    );
+
+    if (requirements.phase === "NON_STATUS" && definition.type === "STATUS") {
+      throw new CommandError(
+        "DISCARD_ORDER_REQUIRED",
+        "Discard the required non-status cards before discarding status cards."
+      );
+    }
+
+    if (requirements.phase === "STATUS" && definition.type !== "STATUS") {
+      throw new CommandError(
+        "DISCARD_ORDER_REQUIRED",
+        "Discard the required status cards to finish the turn."
+      );
     }
   }
 

@@ -7,12 +7,16 @@ export class DeckManager {
   constructor(private readonly starterDeckCardIds: readonly string[] = STARTER_DECK_CARD_IDS) {}
 
   buildStarterDeck(playerId: string): CardInstance[] {
-    return this.starterDeckCardIds.map((cardId) => ({
+    return this.starterDeckCardIds.map((cardId) => this.createCard(cardId, playerId, "DECK"));
+  }
+
+  createCard(cardId: string, ownerId: string, zone: CardInstance["zone"]): CardInstance {
+    return {
       instanceId: `card_${this.nextCardNumber++}`,
       cardId,
-      ownerId: playerId,
-      zone: "DECK"
-    }));
+      ownerId,
+      zone
+    };
   }
 
   shuffle(deck: CardInstance[]): CardInstance[] {
