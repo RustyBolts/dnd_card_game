@@ -31,6 +31,9 @@ export type GameZones = {
   prepared: Record<string, CardInstance[]>;
   temporary: Record<string, CardInstance[]>;
   exhaust: Record<string, CardInstance[]>;
+  nature: Record<string, CardInstance[]>;
+  knowledge: Record<string, CardInstance[]>;
+  environment: Record<string, CardInstance[]>;
   board: CardInstance[];
   graveyard: CardInstance[];
   exile: CardInstance[];
@@ -61,6 +64,12 @@ export type VisibleGameZones = {
   temporaryCounts: Record<string, number>;
   exhaust: Record<string, VisibleCardInstance[]>;
   exhaustCounts: Record<string, number>;
+  nature: Record<string, VisibleCardInstance[]>;
+  natureCounts: Record<string, number>;
+  knowledge: Record<string, VisibleCardInstance[]>;
+  knowledgeCounts: Record<string, number>;
+  environment: Record<string, VisibleCardInstance[]>;
+  environmentCounts: Record<string, number>;
   drawPreview: Record<string, VisibleCardInstance[]>;
   board: VisibleCardInstance[];
   graveyard: VisibleCardInstance[];

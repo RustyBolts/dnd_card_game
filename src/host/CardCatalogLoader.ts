@@ -7,6 +7,7 @@ import type { CardCatalog } from "../shared/types/cardCatalog.js";
 export type HostCardCatalogLoadOptions = {
   cardsCsvPath?: string;
   starterDeckCsvPath?: string;
+  hiddenDecksCsvPath?: string;
   transformRulesCsvPath?: string;
   racesCsvPath?: string;
   version?: string;
@@ -15,6 +16,7 @@ export type HostCardCatalogLoadOptions = {
 
 const DEFAULT_CARDS_CSV_PATH = "data/cards.csv";
 const DEFAULT_STARTER_DECK_CSV_PATH = "data/starter_deck.csv";
+const DEFAULT_HIDDEN_DECKS_CSV_PATH = "data/hidden_decks.csv";
 const DEFAULT_TRANSFORM_RULES_CSV_PATH = "data/transform_rules.csv";
 const DEFAULT_RACES_CSV_PATH = "data/races.csv";
 
@@ -25,6 +27,9 @@ export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {})
   const starterDeckCsvPath = resolve(
     options.starterDeckCsvPath ?? process.env.STARTER_DECK_CSV_PATH ?? DEFAULT_STARTER_DECK_CSV_PATH
   );
+  const hiddenDecksCsvPath = resolve(
+    options.hiddenDecksCsvPath ?? process.env.HIDDEN_DECKS_CSV_PATH ?? DEFAULT_HIDDEN_DECKS_CSV_PATH
+  );
   const transformRulesCsvPath = resolve(
     options.transformRulesCsvPath ??
       process.env.TRANSFORM_RULES_CSV_PATH ??
@@ -33,6 +38,7 @@ export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {})
   const racesCsvPath = resolve(options.racesCsvPath ?? process.env.RACES_CSV_PATH ?? DEFAULT_RACES_CSV_PATH);
   const hasCardsCsv = existsSync(cardsCsvPath);
   const hasStarterDeckCsv = existsSync(starterDeckCsvPath);
+  const hasHiddenDecksCsv = existsSync(hiddenDecksCsvPath);
   const hasTransformRulesCsv = existsSync(transformRulesCsvPath);
   const hasRacesCsv = existsSync(racesCsvPath);
 
@@ -40,15 +46,16 @@ export function loadCardCatalogForHost(options: HostCardCatalogLoadOptions = {})
     return parseCardCatalogFromCsv({
       cardsCsv: readFileSync(cardsCsvPath, "utf8"),
       starterDeckCsv: readFileSync(starterDeckCsvPath, "utf8"),
+      hiddenDecksCsv: hasHiddenDecksCsv ? readFileSync(hiddenDecksCsvPath, "utf8") : undefined,
       transformRulesCsv: hasTransformRulesCsv ? readFileSync(transformRulesCsvPath, "utf8") : undefined,
       racesCsv: hasRacesCsv ? readFileSync(racesCsvPath, "utf8") : undefined,
       version:
         options.version ??
-        `local-csv:${cardsCsvPath}:${starterDeckCsvPath}${hasTransformRulesCsv ? `:${transformRulesCsvPath}` : ""}${hasRacesCsv ? `:${racesCsvPath}` : ""}`
+        `local-csv:${cardsCsvPath}:${starterDeckCsvPath}${hasHiddenDecksCsv ? `:${hiddenDecksCsvPath}` : ""}${hasTransformRulesCsv ? `:${transformRulesCsvPath}` : ""}${hasRacesCsv ? `:${racesCsvPath}` : ""}`
     });
   }
 
-  if (options.requireExternal || hasCardsCsv || hasStarterDeckCsv || hasTransformRulesCsv) {
+  if (options.requireExternal || hasCardsCsv || hasStarterDeckCsv || hasHiddenDecksCsv || hasTransformRulesCsv) {
     throw new Error(
       `Card catalog CSV files must be provided together. Missing: ${[
         hasCardsCsv ? null : cardsCsvPath,

@@ -83,12 +83,13 @@ Node host 可選擇讀取本機 CSV：
 ```txt
 data/cards.csv
 data/starter_deck.csv
+data/hidden_decks.csv
 data/transform_rules.csv
 data/races.csv
 ```
 
 這些 CSV 只是本機測試或上傳 Google Spreadsheet 時的暫存資料，`data/` 已加入 `.gitignore`，不是正式 runtime 依賴。若本機沒有 `cards.csv` 與 `starter_deck.csv`，Node host 會 fallback 到程式內建的 default catalog。`transform_rules.csv` 可省略。
-`races.csv` 可省略；省略時會使用程式內建的人類、地侏、獸人預設種族。
+`hidden_decks.csv` 可省略；省略時自然、知識、環境三個隱藏牌庫為空。`races.csv` 可省略；省略時會使用程式內建的人類、地侏、獸人預設種族。
 
 詳細流程請看：
 
@@ -137,6 +138,7 @@ KV binding: CARD_CATALOG_KV
 Variables:
   CARD_CARDS_CSV_URL=<published cards CSV URL>
   CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_HIDDEN_DECKS_CSV_URL=<published hidden_decks CSV URL>
   CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
   CARD_RACES_CSV_URL=<published races CSV URL>
   CARD_CATALOG_KEY=card-catalog:active
@@ -144,7 +146,7 @@ Secret:
   CARD_CATALOG_ADMIN_TOKEN
 ```
 
-`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 transform rules URL 時代表沒有外部卡牌轉換規則，沒有 races URL 時使用內建種族，沒有 catalog key 時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
+`CARD_HIDDEN_DECKS_CSV_URL`、`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 hidden decks URL 時自然、知識、環境三個隱藏牌庫為空，沒有 transform rules URL 時代表沒有外部卡牌轉換規則，沒有 races URL 時使用內建種族，沒有 catalog key 時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 
 ```bash
 npx wrangler deploy --keep-vars

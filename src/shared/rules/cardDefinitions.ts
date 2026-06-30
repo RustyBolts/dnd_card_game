@@ -69,6 +69,11 @@ export const DEFAULT_CARD_CATALOG: CardCatalog = {
   version: "local-default-2026-06-05",
   cardDefinitions: CARD_DEFINITIONS,
   starterDeckCardIds: STARTER_DECK_CARD_IDS,
+  hiddenDeckCardIds: {
+    NATURE: [],
+    KNOWLEDGE: [],
+    ENVIRONMENT: []
+  },
   transformRules: [],
   races: DEFAULT_RACES
 };

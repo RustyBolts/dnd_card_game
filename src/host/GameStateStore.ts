@@ -13,8 +13,13 @@ import {
   calculateStatusRetainCount,
   type HandDiscardRequirements
 } from "../shared/rules/handRetention.js";
-import type { CardActionTag, CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
-import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
+import type { CardActionTag, CardDefinition, CardDrawPile, CardInstance, CardZone } from "../shared/types/card.js";
+import type {
+  CardCatalog,
+  CardTransformRevertTiming,
+  CardTransformRule,
+  HiddenDeckCardIds
+} from "../shared/types/cardCatalog.js";
 import type { CharacterConfig, CharacterState, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
 import type {
@@ -72,6 +77,7 @@ export class GameStateStore {
   readonly races: Record<string, RaceDefinition>;
 
   private readonly transformRules: CardTransformRule[];
+  private readonly hiddenDeckCardIds: HiddenDeckCardIds;
   private readonly deckManager: DeckManager;
   private readonly snapshotService: SnapshotService;
   private readonly state: GameState;
@@ -86,6 +92,11 @@ export class GameStateStore {
     this.cardCatalogVersion = cardCatalog.version;
     this.races = cardCatalog.races ?? DEFAULT_RACES;
     this.transformRules = cardCatalog.transformRules ?? [];
+    this.hiddenDeckCardIds = {
+      NATURE: [...(cardCatalog.hiddenDeckCardIds?.NATURE ?? [])],
+      KNOWLEDGE: [...(cardCatalog.hiddenDeckCardIds?.KNOWLEDGE ?? [])],
+      ENVIRONMENT: [...(cardCatalog.hiddenDeckCardIds?.ENVIRONMENT ?? [])]
+    };
     this.deckManager = new DeckManager(cardCatalog.starterDeckCardIds);
     this.snapshotService = new SnapshotService(this.cardDefinitions);
     this.state = {
@@ -103,6 +114,9 @@ export class GameStateStore {
         prepared: {},
         temporary: {},
         exhaust: {},
+        nature: {},
+        knowledge: {},
+        environment: {},
         board: [],
         graveyard: [],
         exile: []
@@ -169,6 +183,9 @@ export class GameStateStore {
     this.state.zones.prepared[playerId] = [];
     this.state.zones.temporary[playerId] = [];
     this.state.zones.exhaust[playerId] = [];
+    this.state.zones.nature[playerId] = [];
+    this.state.zones.knowledge[playerId] = [];
+    this.state.zones.environment[playerId] = [];
 
     return {
       player,
@@ -494,6 +511,15 @@ export class GameStateStore {
       this.state.zones.prepared[playerId] = [];
       this.state.zones.temporary[playerId] = [];
       this.state.zones.exhaust[playerId] = [];
+      this.state.zones.nature[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.NATURE, playerId, "NATURE")
+      );
+      this.state.zones.knowledge[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.KNOWLEDGE, playerId, "KNOWLEDGE")
+      );
+      this.state.zones.environment[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.ENVIRONMENT, playerId, "ENVIRONMENT")
+      );
     }
 
     const firstPlayerId = this.state.playerOrder[0];
@@ -544,16 +570,20 @@ export class GameStateStore {
     return events;
   }
 
-  private drawCards(playerId: string, count: number): Array<CardDrawnEvent | DeckRecycledEvent> {
+  private drawCards(
+    playerId: string,
+    count: number,
+    pile: CardDrawPile = "DECK"
+  ): Array<CardDrawnEvent | DeckRecycledEvent> {
     this.assertKnownPlayer(playerId);
     const events: Array<CardDrawnEvent | DeckRecycledEvent> = [];
 
     for (let drawIndex = 0; drawIndex < count; drawIndex += 1) {
-      if ((this.state.zones.deck[playerId]?.length ?? 0) === 0) {
+      if (pile === "DECK" && (this.state.zones.deck[playerId]?.length ?? 0) === 0) {
         events.push(...this.recycleTemporaryPileIntoDeck(playerId));
       }
 
-      const card = this.state.zones.deck[playerId]?.pop();
+      const card = this.drawCardFromPile(playerId, pile);
       if (!card) {
         break;
       }
@@ -566,6 +596,7 @@ export class GameStateStore {
         payload: {
           playerId,
           cardInstanceId: card.instanceId,
+          sourcePile: pile,
           privateCardData: {
             cardId: card.cardId
           }
@@ -574,6 +605,47 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  private drawCardFromPile(playerId: string, pile: CardDrawPile): CardInstance | undefined {
+    if (pile === "GRAVEYARD") {
+      return this.removeOwnedCardFromGlobalPile(this.state.zones.graveyard, playerId);
+    }
+
+    const zonePile = this.getPlayerDrawPile(playerId, pile);
+    const card = zonePile.pop();
+    if (card) {
+      return card;
+    }
+
+    return undefined;
+  }
+
+  private getPlayerDrawPile(playerId: string, pile: Exclude<CardDrawPile, "GRAVEYARD">): CardInstance[] {
+    switch (pile) {
+      case "DECK":
+        return this.state.zones.deck[playerId] ??= [];
+      case "TEMPORARY":
+        return this.state.zones.temporary[playerId] ??= [];
+      case "EXHAUST":
+        return this.state.zones.exhaust[playerId] ??= [];
+      case "NATURE":
+        return this.state.zones.nature[playerId] ??= [];
+      case "KNOWLEDGE":
+        return this.state.zones.knowledge[playerId] ??= [];
+      case "ENVIRONMENT":
+        return this.state.zones.environment[playerId] ??= [];
+    }
+  }
+
+  private removeOwnedCardFromGlobalPile(pile: CardInstance[], playerId: string): CardInstance | undefined {
+    for (let index = pile.length - 1; index >= 0; index -= 1) {
+      if (pile[index]?.ownerId === playerId) {
+        return pile.splice(index, 1)[0];
+      }
+    }
+
+    return undefined;
   }
 
   private recycleTemporaryPileIntoDeck(playerId: string): DeckRecycledEvent[] {
@@ -1213,7 +1285,7 @@ export class GameStateStore {
       playerId,
       targetIds,
       nextSeq: () => this.nextSeq(),
-      drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count),
+      drawCards: (drawingPlayerId, count, pile) => this.drawCards(drawingPlayerId, count, pile),
       addCardsToHand: (receivingPlayerId, cardId, count) =>
         this.addCardsToHand(receivingPlayerId, cardId, count, card.instanceId),
       beforeDamageHit: allowDamageReactions

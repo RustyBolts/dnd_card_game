@@ -15,6 +15,12 @@ export class SnapshotService {
     const temporaryCounts: VisibleGameState["zones"]["temporaryCounts"] = {};
     const exhaust: VisibleGameState["zones"]["exhaust"] = {};
     const exhaustCounts: VisibleGameState["zones"]["exhaustCounts"] = {};
+    const nature: VisibleGameState["zones"]["nature"] = {};
+    const natureCounts: VisibleGameState["zones"]["natureCounts"] = {};
+    const knowledge: VisibleGameState["zones"]["knowledge"] = {};
+    const knowledgeCounts: VisibleGameState["zones"]["knowledgeCounts"] = {};
+    const environment: VisibleGameState["zones"]["environment"] = {};
+    const environmentCounts: VisibleGameState["zones"]["environmentCounts"] = {};
     const drawPreview: VisibleGameState["zones"]["drawPreview"] = {};
 
     for (const playerId of state.playerOrder) {
@@ -23,6 +29,9 @@ export class SnapshotService {
       preparedCounts[playerId] = state.zones.prepared[playerId]?.length ?? 0;
       temporaryCounts[playerId] = state.zones.temporary[playerId]?.length ?? 0;
       exhaustCounts[playerId] = state.zones.exhaust[playerId]?.length ?? 0;
+      natureCounts[playerId] = state.zones.nature[playerId]?.length ?? 0;
+      knowledgeCounts[playerId] = state.zones.knowledge[playerId]?.length ?? 0;
+      environmentCounts[playerId] = state.zones.environment[playerId]?.length ?? 0;
       deck[playerId] = playerId === viewerId
         ? this.sortCardsByName(state.zones.deck[playerId] ?? []).map((card) => this.toVisibleCard(card))
         : [];
@@ -32,6 +41,9 @@ export class SnapshotService {
       prepared[playerId] = (state.zones.prepared[playerId] ?? []).map((card) => this.toVisibleCard(card));
       temporary[playerId] = (state.zones.temporary[playerId] ?? []).map((card) => this.toVisibleCard(card));
       exhaust[playerId] = (state.zones.exhaust[playerId] ?? []).map((card) => this.toVisibleCard(card));
+      nature[playerId] = [];
+      knowledge[playerId] = [];
+      environment[playerId] = [];
       drawPreview[playerId] = playerId === viewerId
         ? this.getDrawPreview(state, playerId).map((card) => this.toVisibleCard(card))
         : [];
@@ -52,6 +64,12 @@ export class SnapshotService {
         temporaryCounts,
         exhaust,
         exhaustCounts,
+        nature,
+        natureCounts,
+        knowledge,
+        knowledgeCounts,
+        environment,
+        environmentCounts,
         drawPreview,
         board: state.zones.board.map((card) => this.toVisibleCard(card)),
         graveyard: state.zones.graveyard.map((card) => this.toVisibleCard(card)),

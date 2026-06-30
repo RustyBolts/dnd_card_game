@@ -10,6 +10,14 @@ export class DeckManager {
     return this.starterDeckCardIds.map((cardId) => this.createCard(cardId, playerId, "DECK"));
   }
 
+  buildCardPile(
+    cardIds: readonly string[],
+    playerId: string,
+    zone: CardInstance["zone"]
+  ): CardInstance[] {
+    return cardIds.map((cardId) => this.createCard(cardId, playerId, zone));
+  }
+
   createCard(cardId: string, ownerId: string, zone: CardInstance["zone"]): CardInstance {
     return {
       instanceId: `card_${this.nextCardNumber++}`,

@@ -1,4 +1,4 @@
-import type { CardActionTagType, CardActionTrigger, CardDefinition } from "./card.js";
+import type { CardActionTagType, CardActionTrigger, CardDefinition, CardDrawPile } from "./card.js";
 import type { CardZone } from "./card.js";
 import type { CharacterConfig, RaceDefinition } from "./character.js";
 import type { PlayerState, VisibleGameState } from "./game.js";
@@ -131,6 +131,7 @@ export type CardDrawnEvent = {
   payload: {
     playerId: string;
     cardInstanceId: string;
+    sourcePile?: CardDrawPile;
     privateCardData?: {
       cardId: string;
     };

@@ -421,6 +421,7 @@ function render(): void {
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
           <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
+          <div>自然 ${localState!.zones.natureCounts[id] ?? 0} · 知識 ${localState!.zones.knowledgeCounts[id] ?? 0} · 環境 ${localState!.zones.environmentCounts[id] ?? 0}</div>
         </div>
       `;
     })
@@ -476,6 +477,21 @@ function renderPileControls(): void {
       key: "exhaust",
       label: "消耗牌堆",
       count: localState.zones.exhaustCounts[playerId] ?? 0
+    },
+    {
+      key: "nature",
+      label: "自然牌庫",
+      count: localState.zones.natureCounts[playerId] ?? 0
+    },
+    {
+      key: "knowledge",
+      label: "知識牌庫",
+      count: localState.zones.knowledgeCounts[playerId] ?? 0
+    },
+    {
+      key: "environment",
+      label: "環境牌庫",
+      count: localState.zones.environmentCounts[playerId] ?? 0
     }
   ];
 
@@ -875,6 +891,30 @@ function getPileView(pileKey: string): { label: string; count: number; cards: Vi
       label: "消耗牌堆",
       count: localState.zones.exhaustCounts[playerId] ?? 0,
       cards: localState.zones.exhaust[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "nature") {
+    return {
+      label: "自然牌庫",
+      count: localState.zones.natureCounts[playerId] ?? 0,
+      cards: localState.zones.nature[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "knowledge") {
+    return {
+      label: "知識牌庫",
+      count: localState.zones.knowledgeCounts[playerId] ?? 0,
+      cards: localState.zones.knowledge[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "environment") {
+    return {
+      label: "環境牌庫",
+      count: localState.zones.environmentCounts[playerId] ?? 0,
+      cards: localState.zones.environment[playerId] ?? []
     };
   }
 

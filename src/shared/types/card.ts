@@ -8,14 +8,29 @@ export type CardZone =
   | "RESOLVING"
   | "TEMPORARY"
   | "EXHAUST"
+  | "NATURE"
+  | "KNOWLEDGE"
+  | "ENVIRONMENT"
   | "GRAVEYARD"
   | "EXILE";
+
+export type CardDrawPile =
+  | "DECK"
+  | "TEMPORARY"
+  | "EXHAUST"
+  | "GRAVEYARD"
+  | "NATURE"
+  | "KNOWLEDGE"
+  | "ENVIRONMENT";
+
+export type HiddenDeckPile = "NATURE" | "KNOWLEDGE" | "ENVIRONMENT";
 
 export type CardEffectDefinition =
   | { type: "NONE" }
   | { type: "DAMAGE"; value: number; count?: number }
   | { type: "HEAL"; value: number }
   | { type: "DRAW"; count: number }
+  | { type: "DRAW_FROM_PILE"; pile: CardDrawPile; count: number }
   | { type: "LOSE_HP"; value: number }
   | { type: "LOSE_ENERGY"; value: number }
   | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number };

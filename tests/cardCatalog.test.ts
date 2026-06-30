@@ -270,6 +270,42 @@ describe("card catalog data source", () => {
     }, "catalog.json")).toThrow(/effect\.cardId references unknown cardId "missing"/);
   });
 
+  it("parses draw-from-pile effects from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+        "verdant_call,自然呼喚,0,SKILL,從自然牌庫抽 2 張。,從牌堆抽牌,自然,2,NONE,SELF,false,true\n",
+      starterDeckCsv: "cardId,count\nverdant_call,1\n",
+      version: "draw-from-pile-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "draw-from-pile-json",
+      cardDefinitions: {
+        scavenge: {
+          cardId: "scavenge",
+          name: "Scavenge",
+          cost: 0,
+          type: "SKILL",
+          description: "Draw from discard.",
+          effect: { type: "DRAW_FROM_PILE", pile: "棄牌堆", count: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["scavenge"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.verdant_call.effect).toEqual({
+      type: "DRAW_FROM_PILE",
+      pile: "NATURE",
+      count: 2
+    });
+    expect(jsonCatalog.cardDefinitions.scavenge.effect).toEqual({
+      type: "DRAW_FROM_PILE",
+      pile: "GRAVEYARD",
+      count: 1
+    });
+  });
+
   it("parses and validates end-turn status action tags", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv:
@@ -405,10 +441,39 @@ describe("card catalog data source", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv: CARDS_CSV,
       starterDeckCsv: STARTER_DECK_CSV,
+      hiddenDecksCsv:
+        "pile,cardId,count,enabled\n" +
+        "知識,tactical_insight,2,true\n" +
+        "ENVIRONMENT,mana_spark,1,true\n",
       version: "kv-test"
     });
 
+    expect(catalog.hiddenDeckCardIds).toEqual({
+      NATURE: [],
+      KNOWLEDGE: ["tactical_insight", "tactical_insight"],
+      ENVIRONMENT: ["mana_spark"]
+    });
     expect(parseCardCatalogJson(JSON.parse(JSON.stringify(catalog)), "test-kv")).toEqual(catalog);
+  });
+
+  it("rejects hidden deck rows that reference unknown cards or non-hidden piles", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv: CARDS_CSV,
+        starterDeckCsv: STARTER_DECK_CSV,
+        hiddenDecksCsv: "pile,cardId,count,enabled\nKNOWLEDGE,missing,1,true\n",
+        version: "bad-hidden-card"
+      })
+    ).toThrow(/unknown cardId "missing"/);
+
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv: CARDS_CSV,
+        starterDeckCsv: STARTER_DECK_CSV,
+        hiddenDecksCsv: "pile,cardId,count,enabled\nDECK,tactical_insight,1,true\n",
+        version: "bad-hidden-pile"
+      })
+    ).toThrow(/pile must be NATURE, KNOWLEDGE, or ENVIRONMENT/);
   });
 
   it("rejects starter deck rows that reference unknown cards", () => {
@@ -714,7 +779,7 @@ describe("card catalog data source", () => {
         starterDeckCsv: "cardId,count\nstance_shift,1\n",
         version: "old-transform-effect"
       })
-    ).toThrow(/effectType must be NONE, DAMAGE, HEAL, DRAW, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND/);
+    ).toThrow(/effectType must be .*DRAW_FROM_PILE.*ADD_CARD_TO_HAND/);
   });
 
   it("normalizes Google Sheets published HTML URLs to CSV URLs", () => {

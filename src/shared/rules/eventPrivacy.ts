@@ -10,7 +10,8 @@ export function redactPrivateEvent(event: GameEvent, recipientPlayerId: string):
       ...event,
       payload: {
         playerId: event.payload.playerId,
-        cardInstanceId: event.payload.cardInstanceId
+        cardInstanceId: event.payload.cardInstanceId,
+        ...(event.payload.sourcePile ? { sourcePile: event.payload.sourcePile } : {})
       }
     };
   }

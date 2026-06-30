@@ -140,6 +140,13 @@ describe("host command validation", () => {
 
   it("hides opponent hand details in player snapshots", () => {
     const store = createStartedGame();
+    const state = store.getState();
+    state.zones.nature.p1 = [{
+      instanceId: "test_hidden_nature",
+      cardId: "fireball",
+      ownerId: "p1",
+      zone: "NATURE"
+    }];
     const snapshot = store.createSnapshotEvent("p1").payload.state;
     const opponentHand = snapshot.zones.hand.p2;
 
@@ -149,7 +156,10 @@ describe("host command validation", () => {
     expect(snapshot.zones.hand.p1.some((card) => !card.hidden && card.cardId !== "hidden")).toBe(true);
     expect(snapshot.zones.deck.p2).toEqual([]);
     expect(snapshot.zones.deck.p1).toHaveLength(snapshot.zones.deckCounts.p1);
+    expect(snapshot.zones.natureCounts.p1).toBe(1);
+    expect(snapshot.zones.nature.p1).toEqual([]);
     expect(snapshot.zones.drawPreview.p1).toHaveLength(1);
+    expect(snapshot.zones.drawPreview.p1.some((card) => card.instanceId === "test_hidden_nature")).toBe(false);
     expect(snapshot.zones.drawPreview.p2).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 import type {
   CardDefinition,
+  CardDrawPile,
   CardEffectDefinition,
   CardInstance
 } from "../types/card.js";
@@ -19,7 +20,8 @@ import type { GameState } from "../types/game.js";
 
 export type DrawCardsFn = (
   playerId: string,
-  count: number
+  count: number,
+  pile?: CardDrawPile
 ) => Array<CardDrawnEvent | DeckRecycledEvent>;
 
 export type AddCardsToHandFn = (
@@ -83,6 +85,10 @@ export function resolveCardEffect(context: EffectContext): GameEvent[] {
 
   if (effect.type === "ADD_CARD_TO_HAND") {
     return resolveAddCardsToHand(effect, context);
+  }
+
+  if (effect.type === "DRAW_FROM_PILE") {
+    return context.drawCards(context.playerId, effect.count, effect.pile);
   }
 
   if (effect.type === "NONE") {

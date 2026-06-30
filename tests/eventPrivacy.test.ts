@@ -3,6 +3,32 @@ import { redactPrivateEvent } from "../src/shared/rules/eventPrivacy.js";
 import type { GameEvent } from "../src/shared/types/network.js";
 
 describe("event privacy", () => {
+  it("redacts drawn card identities while preserving the source pile", () => {
+    const event: GameEvent = {
+      type: "CARD_DRAWN",
+      seq: 6,
+      payload: {
+        playerId: "p2",
+        cardInstanceId: "card_41",
+        sourcePile: "NATURE",
+        privateCardData: {
+          cardId: "seedling"
+        }
+      }
+    };
+
+    expect(redactPrivateEvent(event, "p2")).toBe(event);
+    expect(redactPrivateEvent(event, "p1")).toEqual({
+      type: "CARD_DRAWN",
+      seq: 6,
+      payload: {
+        playerId: "p2",
+        cardInstanceId: "card_41",
+        sourcePile: "NATURE"
+      }
+    });
+  });
+
   it("redacts transformed hand-card identities from other players", () => {
     const event: GameEvent = {
       type: "CARD_TRANSFORMED",

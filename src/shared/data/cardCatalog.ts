@@ -2,7 +2,9 @@ import type {
   CardActionTag,
   CardActionTagType,
   CardDefinition,
+  CardDrawPile,
   CardEffectDefinition,
+  HiddenDeckPile,
   CardResourceCosts,
   CardTargeting,
   CardTargetScope,
@@ -12,6 +14,7 @@ import type {
 import type { AbilityScores, NaturalArmorType, RaceDefinition } from "../types/character.js";
 import type {
   CardCatalog,
+  HiddenDeckCardIds,
   CardTransformRevertTiming,
   CardTransformRule,
   CardTransformScope
@@ -26,6 +29,7 @@ import {
 export type CardCatalogCsvInput = {
   cardsCsv: string;
   starterDeckCsv: string;
+  hiddenDecksCsv?: string;
   transformRulesCsv?: string;
   racesCsv?: string;
   version: string;
@@ -42,10 +46,21 @@ const EFFECT_TYPES = new Set([
   "DAMAGE",
   "HEAL",
   "DRAW",
+  "DRAW_FROM_PILE",
   "LOSE_HP",
   "LOSE_ENERGY",
   "ADD_CARD_TO_HAND"
 ]);
+const DRAW_PILES = new Set([
+  "DECK",
+  "TEMPORARY",
+  "EXHAUST",
+  "GRAVEYARD",
+  "NATURE",
+  "KNOWLEDGE",
+  "ENVIRONMENT"
+]);
+const HIDDEN_DECK_PILES = new Set(["NATURE", "KNOWLEDGE", "ENVIRONMENT"]);
 const ACTION_TAG_TYPES = new Set([
   "BONUS_ACTION",
   "REACTION_ACTION",
@@ -84,6 +99,9 @@ export function normalizePublishedCsvUrl(url: string): string {
 export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog {
   const cardDefinitions = parseCardsCsv(input.cardsCsv);
   const starterDeckCardIds = parseStarterDeckCsv(input.starterDeckCsv, cardDefinitions);
+  const hiddenDeckCardIds = input.hiddenDecksCsv
+    ? parseHiddenDecksCsv(input.hiddenDecksCsv, cardDefinitions)
+    : createEmptyHiddenDeckCardIds();
   const transformRules = input.transformRulesCsv
     ? parseTransformRulesCsv(input.transformRulesCsv, cardDefinitions)
     : [];
@@ -97,6 +115,7 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
     version: input.version,
     cardDefinitions,
     starterDeckCardIds,
+    hiddenDeckCardIds,
     transformRules,
     races
   };
@@ -107,6 +126,7 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
   const version = readRequiredString(catalog.version, "version", source);
   const definitionsRecord = readRecord(catalog.cardDefinitions, `${source}.cardDefinitions`);
   const starterDeckValue = catalog.starterDeckCardIds;
+  const hiddenDecksValue = catalog.hiddenDeckCardIds;
   const transformRulesValue = catalog.transformRules ?? [];
   const racesValue = catalog.races;
 
@@ -141,6 +161,9 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     throw new Error(`${source}.starterDeckCardIds must contain at least one card.`);
   }
 
+  const hiddenDeckCardIds = hiddenDecksValue === undefined
+    ? createEmptyHiddenDeckCardIds()
+    : parseHiddenDecksJson(hiddenDecksValue, cardDefinitions, `${source}.hiddenDeckCardIds`);
   const transformRules = parseTransformRulesJson(
     transformRulesValue,
     cardDefinitions,
@@ -154,6 +177,7 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     version,
     cardDefinitions,
     starterDeckCardIds,
+    hiddenDeckCardIds,
     transformRules,
     races
   };
@@ -223,6 +247,62 @@ function parseStarterDeckCsv(
   }
 
   return starterDeckCardIds;
+}
+
+function parseHiddenDecksCsv(
+  csvText: string,
+  cardDefinitions: Record<string, CardDefinition>
+): HiddenDeckCardIds {
+  const records = parseCsvRecords(csvText, ["pile", "cardId", "count"], "hidden_decks.csv");
+  const hiddenDeckCardIds = createEmptyHiddenDeckCardIds();
+
+  for (const record of records) {
+    if (!isEnabled(record.values.enabled)) {
+      continue;
+    }
+
+    const source = `hidden_decks.csv row ${record.rowNumber}`;
+    const pile = parseHiddenDeckPile(record.values.pile, "pile", source);
+    const cardId = readRequiredString(record.values.cardId, "cardId", source);
+    const count = parseInteger(record.values.count, "count", source, 1);
+
+    if (!cardDefinitions[cardId]) {
+      throw new Error(`${source} references unknown cardId "${cardId}".`);
+    }
+
+    for (let copy = 0; copy < count; copy += 1) {
+      hiddenDeckCardIds[pile].push(cardId);
+    }
+  }
+
+  return hiddenDeckCardIds;
+}
+
+function parseHiddenDecksJson(
+  value: unknown,
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): HiddenDeckCardIds {
+  const record = readRecord(value, source);
+  const hiddenDeckCardIds = createEmptyHiddenDeckCardIds();
+
+  for (const [rawPile, rawCardIds] of Object.entries(record)) {
+    const pile = parseHiddenDeckPile(rawPile, "pile", `${source}.${rawPile}`);
+    if (!Array.isArray(rawCardIds)) {
+      throw new Error(`${source}.${rawPile} must be an array.`);
+    }
+
+    hiddenDeckCardIds[pile] = rawCardIds.map((rawCardId, index) => {
+      const cardId = readRequiredString(rawCardId, `${rawPile}[${index}]`, source);
+      if (!cardDefinitions[cardId]) {
+        throw new Error(`${source}.${rawPile}[${index}] references unknown cardId "${cardId}".`);
+      }
+
+      return cardId;
+    });
+  }
+
+  return hiddenDeckCardIds;
 }
 
 function parseTransformRulesCsv(
@@ -517,6 +597,15 @@ function parseEffect(record: Record<string, unknown>, source: string): CardEffec
     };
   }
 
+  if (effectType === "DRAW_FROM_PILE") {
+    const rawCount = readOptionalString(record.effectCount);
+    return {
+      type: "DRAW_FROM_PILE",
+      pile: parseDrawPile(record.effectPile ?? record.drawPile ?? record.pile ?? record.effectValue, "effectPile", source),
+      count: parseInteger(rawCount, "effectCount", source, 1)
+    };
+  }
+
   if (effectType === "ADD_CARD_TO_HAND") {
     const rawCount = readOptionalString(record.effectCount) || readOptionalString(record.effectValue);
     return {
@@ -552,6 +641,14 @@ function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
   if (effectType === "DRAW") {
     return {
       type: "DRAW",
+      count: parseInteger(record.count, "count", source, 1)
+    };
+  }
+
+  if (effectType === "DRAW_FROM_PILE") {
+    return {
+      type: "DRAW_FROM_PILE",
+      pile: parseDrawPile(record.pile ?? record.sourcePile, "pile", source),
       count: parseInteger(record.count, "count", source, 1)
     };
   }
@@ -834,7 +931,7 @@ function parseEffectType(
 
   if (!EFFECT_TYPES.has(effectType)) {
     throw new Error(
-      `${source} ${field} must be NONE, DAMAGE, HEAL, DRAW, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND.`
+      `${source} ${field} must be NONE, DAMAGE, HEAL, DRAW, DRAW_FROM_PILE, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND.`
     );
   }
 
@@ -861,6 +958,82 @@ function normalizeEffectType(value: string): string {
     case "CREATE_CARD_IN_HAND":
     case "加入手牌":
       return "ADD_CARD_TO_HAND";
+    case "DRAW_FROM":
+    case "DRAW_FROM_DECK":
+    case "DRAW_PILE":
+    case "DRAW_FROM_SOURCE":
+    case "指定牌堆抽牌":
+    case "從指定牌堆抽牌":
+    case "從牌堆抽牌":
+      return "DRAW_FROM_PILE";
+    default:
+      return value;
+  }
+}
+
+function parseDrawPile(value: unknown, field: string, source: string): CardDrawPile {
+  const pile = normalizeDrawPile(
+    readRequiredString(value, field, source).toUpperCase().replaceAll("-", "_").replaceAll(" ", "_")
+  );
+
+  if (!DRAW_PILES.has(pile)) {
+    throw new Error(
+      `${source} ${field} must be DECK, TEMPORARY, EXHAUST, GRAVEYARD, NATURE, KNOWLEDGE, or ENVIRONMENT.`
+    );
+  }
+
+  return pile as CardDrawPile;
+}
+
+function parseHiddenDeckPile(value: unknown, field: string, source: string): HiddenDeckPile {
+  const pile = parseDrawPile(value, field, source);
+  if (!HIDDEN_DECK_PILES.has(pile)) {
+    throw new Error(`${source} ${field} must be NATURE, KNOWLEDGE, or ENVIRONMENT.`);
+  }
+
+  return pile as HiddenDeckPile;
+}
+
+function createEmptyHiddenDeckCardIds(): HiddenDeckCardIds {
+  return {
+    NATURE: [],
+    KNOWLEDGE: [],
+    ENVIRONMENT: []
+  };
+}
+
+function normalizeDrawPile(value: string): string {
+  switch (value) {
+    case "MAIN_DECK":
+    case "ORIGINAL_DECK":
+    case "原始牌庫":
+    case "牌庫":
+      return "DECK";
+    case "TEMP":
+    case "TEMPORARY_PILE":
+    case "暫存":
+    case "暫存牌堆":
+      return "TEMPORARY";
+    case "EXHAUST_PILE":
+    case "消耗":
+    case "消耗牌堆":
+      return "EXHAUST";
+    case "DISCARD":
+    case "DISCARD_PILE":
+    case "棄牌":
+    case "棄牌堆":
+      return "GRAVEYARD";
+    case "NATURE_DECK":
+    case "自然":
+      return "NATURE";
+    case "KNOWLEDGE_DECK":
+    case "知識":
+    case "知识":
+      return "KNOWLEDGE";
+    case "ENVIRONMENT_DECK":
+    case "環境":
+    case "环境":
+      return "ENVIRONMENT";
     default:
       return value;
   }
@@ -1213,7 +1386,7 @@ function readOptionalString(value: unknown): string {
   return "";
 }
 
-function isEnabled(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+function isEnabled(value: string | undefined): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
   return normalized !== "false" && normalized !== "0" && normalized !== "no";
 }
