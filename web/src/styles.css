@@ -307,9 +307,13 @@ h3 {
   font-size: 12px;
 }
 
+.ability-section {
+  grid-column: 1 / -1;
+}
+
 .ability-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -723,6 +727,10 @@ h3 {
   .lobby-controls,
   .lobby-group:nth-of-type(n + 2) .lobby-controls {
     grid-template-columns: 1fr;
+  }
+
+  .ability-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
