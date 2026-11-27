@@ -1108,6 +1108,15 @@ function validateLoadoutSourceDefinition(
     throw new Error(`${source} recoveryCardId is only supported for WEAPON sources.`);
   }
 
+  if (
+    definition.recoveryCardId &&
+    cardDefinitions[definition.recoveryCardId].effect.type !== "REEQUIP_WEAPON"
+  ) {
+    throw new Error(
+      `${source} recoveryCardId "${definition.recoveryCardId}" must reference a card with effect type REEQUIP_WEAPON.`
+    );
+  }
+
   return definition;
 }
 

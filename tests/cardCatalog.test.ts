@@ -138,6 +138,61 @@ describe("card catalog data source", () => {
     ]);
   });
 
+  describe.each(["CSV", "JSON"] as const)("%s recovery card validation", (format) => {
+    function parseSource(sourceType: string, recoveryCardId?: string) {
+      const input = {
+        cardsCsv:
+          CARDS_CSV +
+          "disarm,繳械,1,ATTACK,使目標武器脫手。,DISARM_RANDOM_WEAPON,,,SINGLE,ENEMY,true,true\n" +
+          "no_effect,無效果,0,ITEM,沒有直接效果。,NONE,,,NONE,SELF,false,true\n" +
+          "longsword,長劍,0,ITEM,重新裝備長劍。,REEQUIP_WEAPON,,,NONE,SELF,false,true\n",
+        starterDeckCsv: STARTER_DECK_CSV,
+        version: "recovery-validation"
+      };
+
+      if (format === "CSV") {
+        return parseCardCatalogFromCsv({
+          ...input,
+          loadoutSourcesCsv:
+            "sourceType,sourceId,name,recoveryCardId,enabled\n" +
+            `${sourceType},longsword,長劍,${recoveryCardId ?? ""},true\n`
+        });
+      }
+
+      return parseCardCatalogJson({
+        ...parseCardCatalogFromCsv(input),
+        loadoutSources: [{ sourceType, sourceId: "longsword", name: "長劍", recoveryCardId }]
+      }, "catalog.json");
+    }
+
+    it.each(["fireball", "no_effect", "disarm"])("rejects non-recovery card %s", (cardId) => {
+      expect(() => parseSource("WEAPON", cardId)).toThrow(
+        `recoveryCardId "${cardId}" must reference a card with effect type REEQUIP_WEAPON.`
+      );
+    });
+
+    it("still rejects unknown recovery card IDs", () => {
+      expect(() => parseSource("WEAPON", "missing_card")).toThrow(
+        'recoveryCardId references unknown cardId "missing_card".'
+      );
+    });
+
+    it("still rejects recovery cards on non-weapon sources", () => {
+      expect(() => parseSource("CLASS", "longsword")).toThrow(
+        "recoveryCardId is only supported for WEAPON sources."
+      );
+    });
+
+    it("keeps recoveryCardId optional for weapon sources", () => {
+      const catalog = parseSource("WEAPON");
+      expect(catalog.loadoutSources?.["WEAPON:longsword"]).toEqual({
+        sourceType: "WEAPON",
+        sourceId: "longsword",
+        name: "長劍"
+      });
+    });
+  });
+
   it("parses optional consumable card flags from CSV and JSON catalogs", () => {
     const csvCatalog = parseCardCatalogFromCsv({
       cardsCsv:

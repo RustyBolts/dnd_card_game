@@ -214,7 +214,7 @@ sourceType,sourceId,name,recoveryCardId,enabled
 - `sourceType`：`CLASS` / `職業`、`FEAT` / `專長`、`WEAPON` / `武器` 或 `ADVENTURE_SKILL` / `冒險技能`。
 - `sourceId`：穩定唯一 ID，例如 `fighter`、`brawler`、`longsword`。
 - `name`：顯示名稱，例如 `戰士`、`鬥毆高手`、`長劍`。
-- `recoveryCardId`：只支援 `WEAPON`。武器脫手時，Host/Worker 會生成這張恢復卡並放入暫存牌堆；這張卡通常使用 `effectType=REEQUIP_WEAPON`。
+- `recoveryCardId`：只支援 `WEAPON`。武器脫手時，Host/Worker 會生成這張恢復卡並放入暫存牌堆；若提供此欄位，必須指向同版本已啟用且 `effectType=REEQUIP_WEAPON` 的卡牌；CSV 同步與 KV JSON 載入都會驗證，指向其他效果會被拒絕。此欄位仍可省略；省略時武器脫手不會生成恢復卡。
 - `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
 
 範例：
