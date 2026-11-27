@@ -56,6 +56,88 @@ describe("card catalog data source", () => {
     expect(catalog.races?.human.baseHp).toBe(20);
   });
 
+  it("parses loadout sources and cards from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        CARDS_CSV +
+        "disarm,繳械,1,ATTACK,使目標武器脫手。,DISARM_RANDOM_WEAPON,,,SINGLE,ENEMY,true,true\n" +
+        "slash,揮砍,1,ATTACK,造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,true\n" +
+        "longsword,長劍,0,ITEM,重新裝備長劍。,REEQUIP_WEAPON,,,NONE,SELF,false,true\n",
+      starterDeckCsv: STARTER_DECK_CSV,
+      loadoutSourcesCsv:
+        "sourceType,sourceId,name,recoveryCardId,enabled\n" +
+        "CLASS,fighter,戰士,,true\n" +
+        "WEAPON,longsword,長劍,longsword,true\n",
+      loadoutCardsCsv:
+        "sourceType,sourceId,cardId,count,enabled\n" +
+        "CLASS,fighter,disarm,2,true\n" +
+        "WEAPON,longsword,slash,3,true\n",
+      version: "loadout-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "loadout-json",
+      cardDefinitions: {
+        slash: {
+          cardId: "slash",
+          name: "揮砍",
+          cost: 1,
+          type: "ATTACK",
+          description: "造成 2 點傷害。",
+          effect: { type: "DAMAGE", value: 2 },
+          targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+        },
+        longsword: {
+          cardId: "longsword",
+          name: "長劍",
+          cost: 0,
+          type: "ITEM",
+          description: "重新裝備長劍。",
+          effect: { type: "REEQUIP_WEAPON" },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["slash"],
+      loadoutSources: {
+        "WEAPON:longsword": {
+          name: "長劍",
+          recoveryCardId: "longsword"
+        }
+      },
+      loadoutCards: [
+        {
+          sourceType: "WEAPON",
+          sourceId: "longsword",
+          cardId: "slash",
+          count: 3
+        }
+      ]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.disarm.effect).toEqual({ type: "DISARM_RANDOM_WEAPON" });
+    expect(csvCatalog.cardDefinitions.longsword.effect).toEqual({ type: "REEQUIP_WEAPON" });
+    expect(csvCatalog.loadoutSources?.["WEAPON:longsword"]?.recoveryCardId).toBe("longsword");
+    expect(csvCatalog.loadoutCards).toContainEqual({
+      sourceType: "WEAPON",
+      sourceId: "longsword",
+      cardId: "slash",
+      count: 3
+    });
+    expect(jsonCatalog.loadoutSources?.["WEAPON:longsword"]).toEqual({
+      sourceType: "WEAPON",
+      sourceId: "longsword",
+      name: "長劍",
+      recoveryCardId: "longsword"
+    });
+    expect(jsonCatalog.loadoutCards).toEqual([
+      {
+        sourceType: "WEAPON",
+        sourceId: "longsword",
+        cardId: "slash",
+        count: 3
+      }
+    ]);
+  });
+
   it("parses optional consumable card flags from CSV and JSON catalogs", () => {
     const csvCatalog = parseCardCatalogFromCsv({
       cardsCsv:

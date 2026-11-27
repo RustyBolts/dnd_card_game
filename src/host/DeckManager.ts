@@ -1,4 +1,5 @@
 import type { CardInstance } from "../shared/types/card.js";
+import type { CardOrigin } from "../shared/types/loadout.js";
 import { STARTER_DECK_CARD_IDS } from "../shared/rules/cardDefinitions.js";
 
 export class DeckManager {
@@ -13,17 +14,24 @@ export class DeckManager {
   buildCardPile(
     cardIds: readonly string[],
     playerId: string,
-    zone: CardInstance["zone"]
+    zone: CardInstance["zone"],
+    origin?: CardOrigin
   ): CardInstance[] {
-    return cardIds.map((cardId) => this.createCard(cardId, playerId, zone));
+    return cardIds.map((cardId) => this.createCard(cardId, playerId, zone, origin));
   }
 
-  createCard(cardId: string, ownerId: string, zone: CardInstance["zone"]): CardInstance {
+  createCard(
+    cardId: string,
+    ownerId: string,
+    zone: CardInstance["zone"],
+    origin?: CardOrigin
+  ): CardInstance {
     return {
       instanceId: `card_${this.nextCardNumber++}`,
       cardId,
       ownerId,
-      zone
+      zone,
+      ...(origin ? { origin } : {})
     };
   }
 

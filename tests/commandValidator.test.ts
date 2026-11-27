@@ -138,6 +138,43 @@ describe("host command validation", () => {
     });
   });
 
+  it("accepts character loadout selections on set character commands", () => {
+    const validator = new CommandValidator();
+    const command = validator.parse({
+      type: "SET_CHARACTER",
+      requestId: "req_loadout",
+      payload: {
+        character: {
+          raceId: "human",
+          abilityScores: createDefaultCharacterConfig().abilityScores,
+          classId: "fighter",
+          featIds: ["brawler"],
+          weaponIds: {
+            MAIN_HAND: "longsword"
+          },
+          adventureSkillIds: ["survival"]
+        }
+      }
+    });
+
+    expect(command).toEqual({
+      type: "SET_CHARACTER",
+      requestId: "req_loadout",
+      payload: {
+        character: {
+          raceId: "human",
+          abilityScores: createDefaultCharacterConfig().abilityScores,
+          classId: "fighter",
+          featIds: ["brawler"],
+          weaponIds: {
+            MAIN_HAND: "longsword"
+          },
+          adventureSkillIds: ["survival"]
+        }
+      }
+    });
+  });
+
   it("hides opponent hand details in player snapshots", () => {
     const store = createStartedGame();
     const state = store.getState();

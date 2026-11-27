@@ -49,5 +49,12 @@ export function redactPrivateEvent(event: GameEvent, recipientPlayerId: string):
     return event.payload.playerId === recipientPlayerId ? event : null;
   }
 
+  if (
+    event.type === "LOADOUT_CARDS_SUPPRESSED" ||
+    event.type === "LOADOUT_CARDS_RESTORED"
+  ) {
+    return event.payload.playerId === recipientPlayerId ? event : null;
+  }
+
   return event;
 }

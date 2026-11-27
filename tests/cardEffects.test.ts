@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseCardCatalogFromCsv } from "../src/shared/data/cardCatalog.js";
+import { GameStateStore } from "../src/host/GameStateStore.js";
+import { DEFAULT_CARD_CATALOG } from "../src/shared/rules/cardDefinitions.js";
+import { createDefaultCharacterConfig } from "../src/shared/rules/characterRules.js";
 import type { CardDrawPile, CardInstance } from "../src/shared/types/card.js";
 import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
+import type { GameState } from "../src/shared/types/game.js";
 import type { CardResolvedEvent, GameEvent } from "../src/shared/types/network.js";
 import { createStartedGame, createStartedGameWithPlayers } from "./testUtils.js";
 
@@ -133,6 +137,70 @@ describe("card effects", () => {
     expect(card.zone).toBe("EXHAUST");
     expect(state.zones.exhaust[playerId]).toContain(card);
     expect(state.zones.temporary[playerId]).not.toContain(card);
+  });
+
+  it("moves weapon-origin cards to unavailable on disarm and restores them when the recovery weapon card is played", () => {
+    const store = new GameStateStore("loadout_room", DEFAULT_CARD_CATALOG);
+    const attacker = store.addPlayer("Alice", "session_alice").player;
+    const defender = store.addPlayer("Bob", "session_bob").player;
+
+    store.setPlayerCharacter(attacker.playerId, {
+      ...createDefaultCharacterConfig(),
+      classId: "fighter"
+    });
+    store.setPlayerCharacter(defender.playerId, {
+      ...createDefaultCharacterConfig(),
+      weaponIds: {
+        MAIN_HAND: "longsword"
+      }
+    });
+    store.markPlayerReady(attacker.playerId);
+    store.markPlayerReady(defender.playerId);
+
+    const state = store.getState();
+    const weaponBindingId = state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.bindingId;
+    const disarmCard: CardInstance = {
+      instanceId: "test_disarm",
+      cardId: "disarm",
+      ownerId: attacker.playerId,
+      zone: "HAND"
+    };
+    state.players[attacker.playerId].energy = 1;
+    state.zones.hand[attacker.playerId].push(disarmCard);
+
+    const disarmEvents = store.playCard(attacker.playerId, disarmCard.instanceId, defender.playerId);
+    const recoveryCard = state.zones.temporary[defender.playerId].find(
+      (card) => card.cardId === "longsword" && card.origin?.type === "RECOVERY"
+    );
+
+    expect(disarmEvents.map((event) => event.type)).toContain("EQUIPMENT_DROPPED");
+    expect(disarmEvents.map((event) => event.type)).toContain("LOADOUT_CARDS_SUPPRESSED");
+    expect(disarmEvents.map((event) => event.type)).toContain("CARD_CREATED");
+    expect(state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.status).toBe("DROPPED");
+    expect(recoveryCard?.origin).toEqual({
+      type: "RECOVERY",
+      sourceId: "longsword",
+      bindingId: weaponBindingId
+    });
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "unavailable")).toHaveLength(5);
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "available")).toHaveLength(0);
+
+    state.currentPlayerId = defender.playerId;
+    state.players[defender.playerId].energy = 0;
+    state.zones.temporary[defender.playerId] = state.zones.temporary[defender.playerId].filter(
+      (card) => card !== recoveryCard
+    );
+    recoveryCard!.zone = "HAND";
+    state.zones.hand[defender.playerId].push(recoveryCard!);
+
+    const reequipEvents = store.playCard(defender.playerId, recoveryCard!.instanceId);
+
+    expect(reequipEvents.map((event) => event.type)).toContain("EQUIPMENT_REEQUIPPED");
+    expect(reequipEvents.map((event) => event.type)).toContain("LOADOUT_CARDS_RESTORED");
+    expect(state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.status).toBe("EQUIPPED");
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "unavailable")).toHaveLength(0);
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "deck")).toHaveLength(5);
+    expect(state.zones.exhaust[defender.playerId]).toContain(recoveryCard);
   });
 
   it("rejects enemy single-target damage cards without an explicit target", () => {
@@ -1779,6 +1847,34 @@ function findResolvedEvent(events: GameEvent[], cardInstanceId: string): CardRes
   return events.find((event): event is CardResolvedEvent =>
     event.type === "CARD_RESOLVED" && event.payload.cardInstanceId === cardInstanceId
   );
+}
+
+function cardsWithWeaponBinding(
+  state: GameState,
+  playerId: string,
+  bindingId: string,
+  scope: "available" | "unavailable" | "deck"
+): CardInstance[] {
+  const matches = (card: CardInstance) =>
+    card.origin?.type === "WEAPON" &&
+    card.origin.sourceId === "longsword" &&
+    card.origin.bindingId === bindingId;
+
+  if (scope === "unavailable") {
+    return (state.zones.unavailable[playerId] ?? []).filter(matches);
+  }
+
+  if (scope === "deck") {
+    return (state.zones.deck[playerId] ?? []).filter(matches);
+  }
+
+  return [
+    ...(state.zones.deck[playerId] ?? []),
+    ...(state.zones.hand[playerId] ?? []),
+    ...(state.zones.prepared[playerId] ?? []),
+    ...(state.zones.temporary[playerId] ?? []),
+    ...(state.zones.exhaust[playerId] ?? [])
+  ].filter(matches);
 }
 
 function createExternalHealingCatalog(): CardCatalog {

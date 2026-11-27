@@ -1,3 +1,5 @@
+import type { CardOrigin } from "./loadout.js";
+
 export type CardType = "ATTACK" | "SKILL" | "MAGE" | "ITEM" | "STATUS";
 
 export type CardZone =
@@ -12,7 +14,8 @@ export type CardZone =
   | "KNOWLEDGE"
   | "ENVIRONMENT"
   | "GRAVEYARD"
-  | "EXILE";
+  | "EXILE"
+  | "UNAVAILABLE";
 
 export type CardDrawPile =
   | "DECK"
@@ -33,7 +36,9 @@ export type CardEffectDefinition =
   | { type: "DRAW_FROM_PILE"; pile: CardDrawPile; count: number }
   | { type: "LOSE_HP"; value: number }
   | { type: "LOSE_ENERGY"; value: number }
-  | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number };
+  | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number }
+  | { type: "DISARM_RANDOM_WEAPON" }
+  | { type: "REEQUIP_WEAPON" };
 
 export type CardTargetSelection = "NONE" | "SINGLE" | "GROUP";
 
@@ -89,6 +94,7 @@ export type CardInstance = {
   cardId: string;
   ownerId: string;
   zone: CardZone;
+  origin?: CardOrigin;
   preparedTargetIds?: string[];
 };
 

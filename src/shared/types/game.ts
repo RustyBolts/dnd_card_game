@@ -34,6 +34,7 @@ export type GameZones = {
   nature: Record<string, CardInstance[]>;
   knowledge: Record<string, CardInstance[]>;
   environment: Record<string, CardInstance[]>;
+  unavailable: Record<string, CardInstance[]>;
   board: CardInstance[];
   graveyard: CardInstance[];
   exile: CardInstance[];
@@ -70,6 +71,8 @@ export type VisibleGameZones = {
   knowledgeCounts: Record<string, number>;
   environment: Record<string, VisibleCardInstance[]>;
   environmentCounts: Record<string, number>;
+  unavailable: Record<string, VisibleCardInstance[]>;
+  unavailableCounts: Record<string, number>;
   drawPreview: Record<string, VisibleCardInstance[]>;
   board: VisibleCardInstance[];
   graveyard: VisibleCardInstance[];

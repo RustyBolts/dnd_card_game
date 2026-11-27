@@ -1,5 +1,6 @@
 import type { CardDefinition, HiddenDeckPile } from "./card.js";
 import type { RaceDefinition } from "./character.js";
+import type { LoadoutCardDefinition, LoadoutSourceDefinition } from "./loadout.js";
 
 export type CardTransformScope = "OWNER_HAND";
 
@@ -24,4 +25,6 @@ export type CardCatalog = {
   hiddenDeckCardIds?: HiddenDeckCardIds;
   transformRules: CardTransformRule[];
   races?: Record<string, RaceDefinition>;
+  loadoutSources?: Record<string, LoadoutSourceDefinition>;
+  loadoutCards?: LoadoutCardDefinition[];
 };

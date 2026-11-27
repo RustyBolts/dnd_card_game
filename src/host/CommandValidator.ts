@@ -34,7 +34,13 @@ export class CommandValidator {
           payload: {
             character: {
               raceId: readString(character, "raceId"),
-              abilityScores: readAbilityScores(readRecord(character.abilityScores, "abilityScores"))
+              abilityScores: readAbilityScores(readRecord(character.abilityScores, "abilityScores")),
+              ...(readOptionalStringField(character, "classId") ? { classId: readOptionalStringField(character, "classId") } : {}),
+              ...(readOptionalStringArray(character, "featIds") ? { featIds: readOptionalStringArray(character, "featIds") } : {}),
+              ...(readOptionalStringRecord(character, "weaponIds") ? { weaponIds: readOptionalStringRecord(character, "weaponIds") } : {}),
+              ...(readOptionalStringArray(character, "adventureSkillIds")
+                ? { adventureSkillIds: readOptionalStringArray(character, "adventureSkillIds") }
+                : {})
             }
           }
         };
@@ -108,6 +114,19 @@ function readPayload(message: Record<string, unknown>): Record<string, unknown> 
 
 function readString(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} must be a non-empty string.`);
+  }
+
+  return value;
+}
+
+function readOptionalStringField(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
   if (typeof value !== "string" || value.trim() === "") {
     throw new CommandError("INVALID_PAYLOAD", `Payload field ${key} must be a non-empty string.`);
   }

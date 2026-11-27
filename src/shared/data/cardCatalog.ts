@@ -19,6 +19,12 @@ import type {
   CardTransformRule,
   CardTransformScope
 } from "../types/cardCatalog.js";
+import {
+  loadoutSourceKey,
+  type LoadoutCardDefinition,
+  type LoadoutSourceDefinition,
+  type LoadoutSourceType
+} from "../types/loadout.js";
 import { defaultTargetingForEffect } from "../rules/cardTargets.js";
 import { ABILITY_KEYS } from "../types/character.js";
 import {
@@ -32,6 +38,8 @@ export type CardCatalogCsvInput = {
   hiddenDecksCsv?: string;
   transformRulesCsv?: string;
   racesCsv?: string;
+  loadoutSourcesCsv?: string;
+  loadoutCardsCsv?: string;
   version: string;
 };
 
@@ -49,7 +57,9 @@ const EFFECT_TYPES = new Set([
   "DRAW_FROM_PILE",
   "LOSE_HP",
   "LOSE_ENERGY",
-  "ADD_CARD_TO_HAND"
+  "ADD_CARD_TO_HAND",
+  "DISARM_RANDOM_WEAPON",
+  "REEQUIP_WEAPON"
 ]);
 const DRAW_PILES = new Set([
   "DECK",
@@ -73,6 +83,7 @@ const TARGET_SCOPES = new Set(["SELF", "ALLY", "ENEMY", "ANY"]);
 const TRANSFORM_SCOPES = new Set(["OWNER_HAND"]);
 const TRANSFORM_REVERT_TIMINGS = new Set(["NEVER", "TURN_END"]);
 const NATURAL_ARMOR_TYPES = new Set(["NONE", "FUR", "SHELL", "SKIN"]);
+const LOADOUT_SOURCE_TYPES = new Set(["CLASS", "FEAT", "WEAPON", "ADVENTURE_SKILL"]);
 
 export function normalizePublishedCsvUrl(url: string): string {
   const parsedUrl = new URL(url);
@@ -106,6 +117,12 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
     ? parseTransformRulesCsv(input.transformRulesCsv, cardDefinitions)
     : [];
   const races = input.racesCsv ? parseRacesCsv(input.racesCsv) : DEFAULT_RACES;
+  const loadoutSources = input.loadoutSourcesCsv
+    ? parseLoadoutSourcesCsv(input.loadoutSourcesCsv, cardDefinitions)
+    : {};
+  const loadoutCards = input.loadoutCardsCsv
+    ? parseLoadoutCardsCsv(input.loadoutCardsCsv, cardDefinitions, loadoutSources)
+    : [];
 
   if (starterDeckCardIds.length === 0) {
     throw new Error("starter_deck.csv must contain at least one enabled card.");
@@ -117,7 +134,9 @@ export function parseCardCatalogFromCsv(input: CardCatalogCsvInput): CardCatalog
     starterDeckCardIds,
     hiddenDeckCardIds,
     transformRules,
-    races
+    races,
+    loadoutSources,
+    loadoutCards
   };
 }
 
@@ -129,6 +148,8 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
   const hiddenDecksValue = catalog.hiddenDeckCardIds;
   const transformRulesValue = catalog.transformRules ?? [];
   const racesValue = catalog.races;
+  const loadoutSourcesValue = catalog.loadoutSources;
+  const loadoutCardsValue = catalog.loadoutCards ?? [];
 
   if (!Array.isArray(starterDeckValue)) {
     throw new Error(`${source}.starterDeckCardIds must be an array.`);
@@ -172,6 +193,15 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
   const races = racesValue === undefined
     ? DEFAULT_RACES
     : parseRacesJson(racesValue, `${source}.races`);
+  const loadoutSources = loadoutSourcesValue === undefined
+    ? {}
+    : parseLoadoutSourcesJson(loadoutSourcesValue, cardDefinitions, `${source}.loadoutSources`);
+  const loadoutCards = parseLoadoutCardsJson(
+    loadoutCardsValue,
+    cardDefinitions,
+    loadoutSources,
+    `${source}.loadoutCards`
+  );
 
   return {
     version,
@@ -179,7 +209,9 @@ export function parseCardCatalogJson(value: unknown, source: string): CardCatalo
     starterDeckCardIds,
     hiddenDeckCardIds,
     transformRules,
-    races
+    races,
+    loadoutSources,
+    loadoutCards
   };
 }
 
@@ -483,6 +515,149 @@ function parseRacesJson(value: unknown, source: string): Record<string, RaceDefi
   return races;
 }
 
+function parseLoadoutSourcesCsv(
+  csvText: string,
+  cardDefinitions: Record<string, CardDefinition>
+): Record<string, LoadoutSourceDefinition> {
+  const records = parseCsvRecords(
+    csvText,
+    ["sourceType", "sourceId", "name"],
+    "loadout_sources.csv"
+  );
+  const sources: Record<string, LoadoutSourceDefinition> = {};
+
+  for (const record of records) {
+    if (!isEnabled(record.values.enabled)) {
+      continue;
+    }
+
+    const source = `loadout_sources.csv row ${record.rowNumber}`;
+    const definition = validateLoadoutSourceDefinition(
+      {
+        sourceType: parseLoadoutSourceType(record.values.sourceType, "sourceType", source),
+        sourceId: readRequiredString(record.values.sourceId, "sourceId", source),
+        name: readRequiredString(record.values.name, "name", source),
+        ...(readOptionalString(record.values.recoveryCardId)
+          ? { recoveryCardId: readRequiredString(record.values.recoveryCardId, "recoveryCardId", source) }
+          : {})
+      },
+      cardDefinitions,
+      source
+    );
+    const key = loadoutSourceKey(definition.sourceType, definition.sourceId);
+
+    if (sources[key]) {
+      throw new Error(`${source} duplicates loadout source "${key}".`);
+    }
+
+    sources[key] = definition;
+  }
+
+  return sources;
+}
+
+function parseLoadoutSourcesJson(
+  value: unknown,
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): Record<string, LoadoutSourceDefinition> {
+  const rawSources = Array.isArray(value)
+    ? value.map((entry, index) => [`${source}[${index}]`, entry] as const)
+    : Object.entries(readRecord(value, source));
+  const sources: Record<string, LoadoutSourceDefinition> = {};
+
+  for (const [entryKey, rawSource] of rawSources) {
+    const sourceRecord = readRecord(rawSource, entryKey);
+    const inferred = inferLoadoutSourceFromKey(entryKey);
+    const definition = validateLoadoutSourceDefinition(
+      {
+        sourceType: parseLoadoutSourceType(
+          sourceRecord.sourceType ?? sourceRecord.type ?? inferred?.sourceType,
+          "sourceType",
+          entryKey
+        ),
+        sourceId: readRequiredString(sourceRecord.sourceId ?? sourceRecord.id ?? inferred?.sourceId, "sourceId", entryKey),
+        name: readRequiredString(sourceRecord.name, "name", entryKey),
+        ...(readOptionalString(sourceRecord.recoveryCardId)
+          ? { recoveryCardId: readRequiredString(sourceRecord.recoveryCardId, "recoveryCardId", entryKey) }
+          : {})
+      },
+      cardDefinitions,
+      entryKey
+    );
+    const key = loadoutSourceKey(definition.sourceType, definition.sourceId);
+
+    if (sources[key]) {
+      throw new Error(`${entryKey} duplicates loadout source "${key}".`);
+    }
+
+    sources[key] = definition;
+  }
+
+  return sources;
+}
+
+function parseLoadoutCardsCsv(
+  csvText: string,
+  cardDefinitions: Record<string, CardDefinition>,
+  loadoutSources: Record<string, LoadoutSourceDefinition>
+): LoadoutCardDefinition[] {
+  const records = parseCsvRecords(
+    csvText,
+    ["sourceType", "sourceId", "cardId", "count"],
+    "loadout_cards.csv"
+  );
+  const cards: LoadoutCardDefinition[] = [];
+
+  for (const record of records) {
+    if (!isEnabled(record.values.enabled)) {
+      continue;
+    }
+
+    const source = `loadout_cards.csv row ${record.rowNumber}`;
+    cards.push(validateLoadoutCardDefinition(
+      {
+        sourceType: parseLoadoutSourceType(record.values.sourceType, "sourceType", source),
+        sourceId: readRequiredString(record.values.sourceId, "sourceId", source),
+        cardId: readRequiredString(record.values.cardId, "cardId", source),
+        count: parseInteger(record.values.count, "count", source, 1)
+      },
+      cardDefinitions,
+      loadoutSources,
+      source
+    ));
+  }
+
+  return cards;
+}
+
+function parseLoadoutCardsJson(
+  value: unknown,
+  cardDefinitions: Record<string, CardDefinition>,
+  loadoutSources: Record<string, LoadoutSourceDefinition>,
+  source: string
+): LoadoutCardDefinition[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source} must be an array.`);
+  }
+
+  return value.map((rawCard, index) => {
+    const cardSource = `${source}[${index}]`;
+    const record = readRecord(rawCard, cardSource);
+    return validateLoadoutCardDefinition(
+      {
+        sourceType: parseLoadoutSourceType(record.sourceType ?? record.type, "sourceType", cardSource),
+        sourceId: readRequiredString(record.sourceId ?? record.id, "sourceId", cardSource),
+        cardId: readRequiredString(record.cardId, "cardId", cardSource),
+        count: parseInteger(record.count, "count", cardSource, 1)
+      },
+      cardDefinitions,
+      loadoutSources,
+      cardSource
+    );
+  });
+}
+
 function parseCardDefinitionRecord(
   record: Record<string, unknown>,
   source: string
@@ -615,6 +790,10 @@ function parseEffect(record: Record<string, unknown>, source: string): CardEffec
     };
   }
 
+  if (effectType === "DISARM_RANDOM_WEAPON" || effectType === "REEQUIP_WEAPON") {
+    return { type: effectType };
+  }
+
   if (effectType === "DAMAGE") {
     const count = parseOptionalInteger(record.effectCount, "effectCount", source, 1);
     return {
@@ -659,6 +838,10 @@ function parseEffectJson(value: unknown, source: string): CardEffectDefinition {
       cardId: readRequiredString(record.cardId, "cardId", source),
       count: parseInteger(record.count, "count", source, 1)
     };
+  }
+
+  if (effectType === "DISARM_RANDOM_WEAPON" || effectType === "REEQUIP_WEAPON") {
+    return { type: effectType };
   }
 
   if (effectType === "DAMAGE") {
@@ -910,6 +1093,91 @@ function validateEffectCardReferences(
   }
 }
 
+function validateLoadoutSourceDefinition(
+  definition: LoadoutSourceDefinition,
+  cardDefinitions: Record<string, CardDefinition>,
+  source: string
+): LoadoutSourceDefinition {
+  if (definition.recoveryCardId && !cardDefinitions[definition.recoveryCardId]) {
+    throw new Error(
+      `${source} recoveryCardId references unknown cardId "${definition.recoveryCardId}".`
+    );
+  }
+
+  if (definition.recoveryCardId && definition.sourceType !== "WEAPON") {
+    throw new Error(`${source} recoveryCardId is only supported for WEAPON sources.`);
+  }
+
+  return definition;
+}
+
+function validateLoadoutCardDefinition(
+  definition: LoadoutCardDefinition,
+  cardDefinitions: Record<string, CardDefinition>,
+  loadoutSources: Record<string, LoadoutSourceDefinition>,
+  source: string
+): LoadoutCardDefinition {
+  if (!cardDefinitions[definition.cardId]) {
+    throw new Error(`${source} cardId references unknown cardId "${definition.cardId}".`);
+  }
+
+  const key = loadoutSourceKey(definition.sourceType, definition.sourceId);
+  if (!loadoutSources[key]) {
+    throw new Error(`${source} references unknown loadout source "${key}".`);
+  }
+
+  return definition;
+}
+
+function parseLoadoutSourceType(value: unknown, field: string, source: string): LoadoutSourceType {
+  const sourceType = normalizeLoadoutSourceType(
+    readRequiredString(value, field, source).toUpperCase().replaceAll("-", "_").replaceAll(" ", "_")
+  );
+
+  if (!LOADOUT_SOURCE_TYPES.has(sourceType)) {
+    throw new Error(`${source} ${field} must be CLASS, FEAT, WEAPON, or ADVENTURE_SKILL.`);
+  }
+
+  return sourceType as LoadoutSourceType;
+}
+
+function normalizeLoadoutSourceType(value: string): string {
+  switch (value) {
+    case "職業":
+      return "CLASS";
+    case "專長":
+    case "专长":
+      return "FEAT";
+    case "武器":
+      return "WEAPON";
+    case "ADVENTURE":
+    case "SKILL_SOURCE":
+    case "ADVENTURE_SKILLS":
+    case "冒險技能":
+    case "冒险技能":
+      return "ADVENTURE_SKILL";
+    default:
+      return value;
+  }
+}
+
+function inferLoadoutSourceFromKey(key: string): { sourceType: LoadoutSourceType; sourceId: string } | null {
+  const [rawSourceType, ...sourceIdParts] = key.split(":");
+  if (!rawSourceType || sourceIdParts.length === 0) {
+    return null;
+  }
+
+  const sourceType = normalizeLoadoutSourceType(rawSourceType.toUpperCase());
+  if (!LOADOUT_SOURCE_TYPES.has(sourceType)) {
+    return null;
+  }
+
+  return {
+    sourceType: sourceType as LoadoutSourceType,
+    sourceId: sourceIdParts.join(":")
+  };
+}
+
 function parseCardType(value: unknown, source: string): CardType {
   const cardType = readRequiredString(value, "type", source).toUpperCase();
 
@@ -931,7 +1199,7 @@ function parseEffectType(
 
   if (!EFFECT_TYPES.has(effectType)) {
     throw new Error(
-      `${source} ${field} must be NONE, DAMAGE, HEAL, DRAW, DRAW_FROM_PILE, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND.`
+      `${source} ${field} must be NONE, DAMAGE, HEAL, DRAW, DRAW_FROM_PILE, LOSE_HP, LOSE_ENERGY, ADD_CARD_TO_HAND, DISARM_RANDOM_WEAPON, or REEQUIP_WEAPON.`
     );
   }
 
@@ -966,6 +1234,19 @@ function normalizeEffectType(value: string): string {
     case "從指定牌堆抽牌":
     case "從牌堆抽牌":
       return "DRAW_FROM_PILE";
+    case "DISARM":
+    case "DISARM_WEAPON":
+    case "RANDOM_DISARM":
+    case "繳械":
+    case "缴械":
+      return "DISARM_RANDOM_WEAPON";
+    case "REEQUIP":
+    case "EQUIP_WEAPON":
+    case "RECOVER_WEAPON":
+    case "重新裝備":
+    case "重新装备":
+    case "重新上手":
+      return "REEQUIP_WEAPON";
     default:
       return value;
   }

@@ -11,7 +11,7 @@ Google Spreadsheet
   -> Worker 驗證 CSV
   -> Worker 將 active catalog JSON 寫入 Cloudflare KV
   -> 新的 Durable Object 房間從 KV 載入 active catalog
-  -> GAME_STATE_SYNC 帶出 cardDefinitions 與 cardCatalogVersion
+  -> GAME_STATE_SYNC 帶出 cardDefinitions、loadoutSources、loadoutCards 與 cardCatalogVersion
 ```
 
 已經開始或已經初始化的房間不會即時重載卡表。房間會鎖定初始化當下的 catalog version，避免一場遊戲打到一半時因為 Google Sheet 被修改而改變卡片規則。
@@ -25,16 +25,20 @@ Google Spreadsheet
 - `data/hidden_decks.csv`（可選）
 - `data/transform_rules.csv`（可選）
 - `data/races.csv`（可選）
+- `data/loadout_sources.csv`（可選）
+- `data/loadout_cards.csv`（可選）
 
 `data/` 已加入 `.gitignore`，不納入 git，也不是 Cloudflare runtime 的必要資料來源。Cloudflare Worker 實際讀取的是 `wrangler.toml` / Worker variables 中設定的 Google Spreadsheet CSV URL。
 
-Google Spreadsheet 建議建立五個工作表：
+Google Spreadsheet 建議建立七個工作表：
 
 - `cards`
 - `starter_deck`
 - `hidden_decks`（可選）
 - `transform_rules`（可選）
 - `races`（可選）
+- `loadout_sources`（可選）
+- `loadout_cards`（可選）
 
 ### `cards` 欄位
 
@@ -47,7 +51,7 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,effectPile,
 - `cost`：整數，必須 >= 0。
 - `type`：`ATTACK`、`SKILL`、`MAGE`、`ITEM` 或 `STATUS`。
 - `description`：顯示文字。
-- `effectType`：`NONE`、`DAMAGE`、`HEAL`、`DRAW`、`DRAW_FROM_PILE`、`LOSE_HP`、`LOSE_ENERGY` 或 `ADD_CARD_TO_HAND`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。`DRAW_FROM_PILE` 也接受 `DRAW_FROM`、`DRAW_PILE`、`從牌堆抽牌` 等別名；`LOSE_HP` 也接受 `HP_LOSS` 等別名；`LOSE_ENERGY` 也接受 `ENERGY_LOSS` 等別名；`ADD_CARD_TO_HAND` 也接受 `ADD_TO_HAND`。
+- `effectType`：`NONE`、`DAMAGE`、`HEAL`、`DRAW`、`DRAW_FROM_PILE`、`LOSE_HP`、`LOSE_ENERGY`、`ADD_CARD_TO_HAND`、`DISARM_RANDOM_WEAPON` 或 `REEQUIP_WEAPON`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。`DRAW_FROM_PILE` 也接受 `DRAW_FROM`、`DRAW_PILE`、`從牌堆抽牌` 等別名；`LOSE_HP` 也接受 `HP_LOSS` 等別名；`LOSE_ENERGY` 也接受 `ENERGY_LOSS` 等別名；`ADD_CARD_TO_HAND` 也接受 `ADD_TO_HAND`；`DISARM_RANDOM_WEAPON` 也接受 `繳械`；`REEQUIP_WEAPON` 也接受 `重新裝備`、`重新上手`。
 - `effectValue`：`DAMAGE`、`HEAL`、`LOSE_HP`、`LOSE_ENERGY` 使用的數值；`DRAW_FROM_PILE` 若沒有 `effectPile` 欄位，也可以暫時把牌堆名稱放在這裡。
 - `effectCount`：`DAMAGE` 使用的攻擊次數、`DRAW` / `DRAW_FROM_PILE` 使用的抽牌張數，或 `ADD_CARD_TO_HAND` 對每名效果目標加入的張數，必須至少為 1。`DAMAGE` 留空時視為攻擊 1 次。
 - `effectPile`：`DRAW_FROM_PILE` 必填，指定抽牌來源。支援 `DECK` / `牌庫`、`TEMPORARY` / `暫存牌堆`、`EXHAUST` / `消耗牌堆`、`GRAVEYARD` / `棄牌堆`、`NATURE` / `自然`、`KNOWLEDGE` / `知識`、`ENVIRONMENT` / `環境`。若 CSV 還沒有此欄位，可用 `effectValue` 放牌堆名稱。
@@ -201,6 +205,54 @@ gnome,地侏,20,SKIN,0,15,18,20,20,18,15,20,20,20,20,20,20,true
 orc,獸人,25,FUR,0,20,18,15,15,15,20,20,20,20,20,20,20,true
 ```
 
+### `loadout_sources` 欄位
+
+```txt
+sourceType,sourceId,name,recoveryCardId,enabled
+```
+
+- `sourceType`：`CLASS` / `職業`、`FEAT` / `專長`、`WEAPON` / `武器` 或 `ADVENTURE_SKILL` / `冒險技能`。
+- `sourceId`：穩定唯一 ID，例如 `fighter`、`brawler`、`longsword`。
+- `name`：顯示名稱，例如 `戰士`、`鬥毆高手`、`長劍`。
+- `recoveryCardId`：只支援 `WEAPON`。武器脫手時，Host/Worker 會生成這張恢復卡並放入暫存牌堆；這張卡通常使用 `effectType=REEQUIP_WEAPON`。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+範例：
+
+```txt
+sourceType,sourceId,name,recoveryCardId,enabled
+CLASS,fighter,戰士,,true
+FEAT,brawler,鬥毆高手,,true
+WEAPON,longsword,長劍,longsword,true
+```
+
+### `loadout_cards` 欄位
+
+```txt
+sourceType,sourceId,cardId,count,enabled
+```
+
+- `sourceType` 與 `sourceId` 必須對應 `loadout_sources` 中已啟用的來源。
+- `cardId` 必須存在於同版本已啟用的 `cards`。
+- `count`：該來源加入開局牌庫的張數，必須 >= 1。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+前端等待室會依職業、專長、武器、冒險技能的順序讀取 `loadout_sources` 與 `loadout_cards`，在玩家選擇時顯示該來源會加入的卡牌與張數。
+
+範例：
+
+```txt
+sourceType,sourceId,cardId,count,enabled
+CLASS,fighter,disarm,2,true
+CLASS,fighter,charge,3,true
+FEAT,brawler,punch,3,true
+FEAT,brawler,feint,2,true
+WEAPON,longsword,slash,3,true
+WEAPON,longsword,thrust,2,true
+```
+
+Host/Worker 開局時會以 `starter_deck` 建立基本牌庫，再依玩家角色設定的職業、專長、武器與冒險技能追加來源牌。每張來源牌都會記錄來源綁定；例如長劍來源的 `slash` / `thrust` 會帶同一個武器 binding。`DISARM_RANDOM_WEAPON` 使目標武器脫手時，Host/Worker 會把該 binding 的武器來源牌從可用牌堆移到不可用牌堆，並生成 `recoveryCardId` 指定的長劍牌到暫存牌堆。這張恢復卡之後依一般暫存牌堆規則洗回牌庫；打出後觸發 `REEQUIP_WEAPON`，武器重新裝備，對應來源牌洗回牌庫。
+
 ## 本機 Node Host
 
 `npm run dev:host` 預設讀取 seed CSV：
@@ -212,11 +264,11 @@ npm run dev:host -- --port 7777
 測試其他 CSV 匯出檔時可以指定路徑：
 
 ```bash
-npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --hidden-decks-csv /path/to/hidden_decks.csv --transform-rules-csv /path/to/transform_rules.csv --races-csv /path/to/races.csv
+npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --hidden-decks-csv /path/to/hidden_decks.csv --transform-rules-csv /path/to/transform_rules.csv --races-csv /path/to/races.csv --loadout-sources-csv /path/to/loadout_sources.csv --loadout-cards-csv /path/to/loadout_cards.csv
 ```
 
 如果 `cards.csv` 與 `starter_deck.csv` 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個，或只有 `hidden_decks.csv` / `transform_rules.csv`，啟動會失敗，因為 card catalog 不完整。`hidden_decks.csv` 可省略；省略時代表三個隱藏牌庫為空。`transform_rules.csv` 可省略；省略時代表沒有外部轉換規則。
-`races.csv` 可省略；省略時代表使用內建種族。
+`races.csv`、`loadout_sources.csv` 與 `loadout_cards.csv` 可省略；省略 `races.csv` 時代表使用內建種族，省略 loadout 檔時代表不從外部追加職業/專長/武器/冒險技能來源牌。
 
 ## Cloudflare Worker 設定
 
@@ -234,10 +286,12 @@ CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
 CARD_HIDDEN_DECKS_CSV_URL=<published hidden_decks CSV URL>
 CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
 CARD_RACES_CSV_URL=<published races CSV URL>
+CARD_LOADOUT_SOURCES_CSV_URL=<published loadout_sources CSV URL>
+CARD_LOADOUT_CARDS_CSV_URL=<published loadout_cards CSV URL>
 CARD_CATALOG_KEY=card-catalog:active
 ```
 
-`CARD_HIDDEN_DECKS_CSV_URL`、`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_HIDDEN_DECKS_CSV_URL` 時代表三個隱藏牌庫開局為空，沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_RACES_CSV_URL` 時使用內建種族，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
+`CARD_HIDDEN_DECKS_CSV_URL`、`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL`、`CARD_LOADOUT_SOURCES_CSV_URL`、`CARD_LOADOUT_CARDS_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_HIDDEN_DECKS_CSV_URL` 時代表三個隱藏牌庫開局為空，沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_RACES_CSV_URL` 時使用內建種族，沒有 loadout URL 時代表不從外部追加職業/專長/武器/冒險技能來源牌，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
 
 如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 

@@ -18,8 +18,15 @@ import {
   ABILITY_KEYS,
   type AbilityKey,
   type AbilityScores,
+  type CharacterState,
   type RaceDefinition
 } from "../../src/shared/types/character";
+import {
+  loadoutSourceKey,
+  type LoadoutCardDefinition,
+  type LoadoutSourceDefinition,
+  type LoadoutSourceType
+} from "../../src/shared/types/loadout";
 import type { VisibleGameState } from "../../src/shared/types/game";
 import type { GameEvent, GameStateSyncEvent, JoinAcceptedEvent, NetworkMessage } from "../../src/shared/types/network";
 import "./styles.css";
@@ -48,6 +55,7 @@ const createRoomButton = byId<HTMLButtonElement>("create-room-button");
 const lobbyStatusEl = byId<HTMLElement>("lobby-status");
 const characterBuilderSection = byId<HTMLElement>("character-builder");
 const raceOptionsEl = byId<HTMLElement>("race-options");
+const loadoutOptionsEl = byId<HTMLElement>("loadout-options");
 const abilityControlsEl = byId<HTMLElement>("ability-controls");
 const abilityPointsEl = byId<HTMLElement>("ability-points");
 const characterSummaryEl = byId<HTMLElement>("character-summary");
@@ -91,7 +99,13 @@ let lobbyStatus = "Connect to the lobby before choosing a room.";
 let activeRoomId: string | null = null;
 let cardDefinitions: Record<string, CardDefinition> = {};
 let races: Record<string, RaceDefinition> = DEFAULT_RACES;
+let loadoutSources: Record<string, LoadoutSourceDefinition> = {};
+let loadoutCards: LoadoutCardDefinition[] = [];
 let selectedRaceId = Object.keys(DEFAULT_RACES)[0] ?? "human";
+let selectedClassId = "";
+let selectedFeatIds: string[] = [];
+let selectedWeaponIds: Record<string, string> = {};
+let selectedAdventureSkillIds: string[] = [];
 let raceCatalogLoaded = false;
 let raceCatalogLoading = false;
 let raceCatalogStatus = "Using local default races until a Worker catalog is loaded.";
@@ -353,6 +367,9 @@ function handleMessage(rawMessage: string): void {
     localState = message.payload.state;
     cardDefinitions = message.payload.cardDefinitions;
     races = message.payload.races ?? {};
+    loadoutSources = message.payload.loadoutSources ?? {};
+    loadoutCards = message.payload.loadoutCards ?? [];
+    ensureSelectedLoadoutDefaults();
     raceCatalogLoaded = Object.keys(races).length > 0;
     raceCatalogStatus = raceCatalogLoaded
       ? `Room catalog ${message.payload.cardCatalogVersion} · ${Object.keys(races).length} races.`
@@ -401,6 +418,8 @@ function render(): void {
       const characterRows = character
         ? `
           <div>${escapeHtml(raceName(character.raceId))}</div>
+          <div>${escapeHtml(loadoutSummary(character))}</div>
+          <div>${escapeHtml(weaponStatusSummary(character))}</div>
           <div>HP ${player.hp}/${player.maxHp}</div>
           <div>CON ${character.abilityScores.constitution} (${formatModifier(character.abilityModifiers.constitution)})</div>
         `
@@ -421,6 +440,7 @@ function render(): void {
           <div>Energy ${player.energy}/${player.maxEnergy}</div>
           <div>Hand ${localState!.zones.handCounts[id] ?? 0} · Deck ${localState!.zones.deckCounts[id] ?? 0}</div>
           <div>準備 ${localState!.zones.preparedCounts[id] ?? 0} · 暫存 ${localState!.zones.temporaryCounts[id] ?? 0} · 消耗 ${localState!.zones.exhaustCounts[id] ?? 0}</div>
+          <div>不可用 ${localState!.zones.unavailableCounts[id] ?? 0}</div>
           <div>自然 ${localState!.zones.natureCounts[id] ?? 0} · 知識 ${localState!.zones.knowledgeCounts[id] ?? 0} · 環境 ${localState!.zones.environmentCounts[id] ?? 0}</div>
         </div>
       `;
@@ -479,6 +499,11 @@ function renderPileControls(): void {
       count: localState.zones.exhaustCounts[playerId] ?? 0
     },
     {
+      key: "unavailable",
+      label: "不可用牌堆",
+      count: localState.zones.unavailableCounts[playerId] ?? 0
+    },
+    {
       key: "nature",
       label: "自然牌庫",
       count: localState.zones.natureCounts[playerId] ?? 0
@@ -533,6 +558,7 @@ function renderCharacterBuilder(): void {
 
   if (Object.keys(races).length === 0) {
     raceOptionsEl.innerHTML = `<p class="muted">Race catalog is not available.</p>`;
+    loadoutOptionsEl.innerHTML = "";
     abilityControlsEl.innerHTML = `<p class="muted">Ability controls are unavailable until race data is available.</p>`;
     abilityPointsEl.textContent = "Locked";
     abilityPointsEl.className = "points-warn";
@@ -563,6 +589,8 @@ function renderCharacterBuilder(): void {
     `)
     .join("");
 
+  renderLoadoutOptions(isCharacterLocked);
+
   abilityControlsEl.innerHTML = ABILITY_KEYS.map((ability) => {
     const value = abilityScores[ability];
     const max = race?.creationMax[ability] ?? 15;
@@ -586,9 +614,154 @@ function renderCharacterBuilder(): void {
 
   const character = tryCreateCharacter();
   characterSummaryEl.textContent = character
-    ? `${race.name} · HP ${character.maxHp} · CON ${formatModifier(character.abilityModifiers.constitution)}${isCharacterLocked ? " · Locked" : ""}`
+    ? `${race.name} · ${loadoutSummary(character)} · HP ${character.maxHp} · CON ${formatModifier(character.abilityModifiers.constitution)}${isCharacterLocked ? " · Locked" : ""}`
     : "Spend all points within the selected race limits.";
   catalogStatusEl.textContent = raceCatalogStatus;
+}
+
+function renderLoadoutOptions(isCharacterLocked: boolean): void {
+  const grouped = groupedLoadoutSources();
+
+  if (Object.keys(loadoutSources).length === 0) {
+    loadoutOptionsEl.innerHTML = `<p class="muted">No loadout catalog available.</p>`;
+    return;
+  }
+
+  loadoutOptionsEl.innerHTML = `
+    <div class="loadout-flow">
+      ${renderClassStep(grouped.CLASS, isCharacterLocked)}
+      ${renderLoadoutCheckboxStep(2, "專長", "feat", grouped.FEAT, selectedFeatIds, isCharacterLocked)}
+      ${renderWeaponStep(grouped.WEAPON, isCharacterLocked)}
+      ${renderLoadoutCheckboxStep(4, "冒險技能", "adventure", grouped.ADVENTURE_SKILL, selectedAdventureSkillIds, isCharacterLocked)}
+    </div>
+  `;
+}
+
+function renderClassStep(sources: LoadoutSourceDefinition[], isCharacterLocked: boolean): string {
+  return `
+    <section class="loadout-step">
+      <div class="loadout-step-heading">
+        <span>1</span>
+        <strong>職業</strong>
+      </div>
+      ${sources.length > 0
+        ? `
+          <label class="loadout-select">
+            <select data-loadout-class ${isCharacterLocked ? "disabled" : ""}>
+              <option value="">不選擇</option>
+              ${sources.map((source) =>
+                `<option value="${escapeHtml(source.sourceId)}" ${source.sourceId === selectedClassId ? "selected" : ""}>${escapeHtml(source.name)}</option>`
+              ).join("")}
+            </select>
+          </label>
+          ${renderSelectedSourceCards("CLASS", selectedClassId)}
+        `
+        : `<p class="muted">未設定職業來源。</p>`}
+    </section>
+  `;
+}
+
+function renderWeaponStep(sources: LoadoutSourceDefinition[], isCharacterLocked: boolean): string {
+  const selectedWeaponId = selectedWeaponIds.MAIN_HAND ?? "";
+
+  return `
+    <section class="loadout-step">
+      <div class="loadout-step-heading">
+        <span>3</span>
+        <strong>武器</strong>
+      </div>
+      ${sources.length > 0
+        ? `
+          <label class="loadout-select">
+            <select data-loadout-weapon="MAIN_HAND" ${isCharacterLocked ? "disabled" : ""}>
+              <option value="">不選擇</option>
+              ${sources.map((source) =>
+                `<option value="${escapeHtml(source.sourceId)}" ${source.sourceId === selectedWeaponId ? "selected" : ""}>${escapeHtml(source.name)}</option>`
+              ).join("")}
+            </select>
+          </label>
+          ${renderSelectedSourceCards("WEAPON", selectedWeaponId)}
+        `
+        : `<p class="muted">未設定武器來源。</p>`}
+    </section>
+  `;
+}
+
+function renderLoadoutCheckboxStep(
+  stepNumber: number,
+  label: string,
+  kind: "feat" | "adventure",
+  sources: LoadoutSourceDefinition[],
+  selectedIds: string[],
+  isCharacterLocked: boolean
+): string {
+  const sourceType: LoadoutSourceType = kind === "feat" ? "FEAT" : "ADVENTURE_SKILL";
+  return `
+    <section class="loadout-step">
+      <div class="loadout-step-heading">
+        <span>${stepNumber}</span>
+        <strong>${label}</strong>
+      </div>
+      ${sources.length > 0
+        ? `
+          <fieldset class="loadout-checks">
+            ${sources.map((source) => `
+              <label class="loadout-choice">
+                <input type="checkbox" data-loadout-${kind} value="${escapeHtml(source.sourceId)}" ${selectedIds.includes(source.sourceId) ? "checked" : ""} ${isCharacterLocked ? "disabled" : ""} />
+                <span>
+                  <strong>${escapeHtml(source.name)}</strong>
+                  <small>${escapeHtml(sourceCardSummaryText(sourceType, source.sourceId))}</small>
+                </span>
+              </label>
+            `).join("")}
+          </fieldset>
+        `
+        : `<p class="muted">未設定${label}來源。</p>`}
+    </section>
+  `;
+}
+
+function renderSelectedSourceCards(sourceType: LoadoutSourceType, sourceId: string): string {
+  if (!sourceId) {
+    return `<div class="loadout-card-list muted">尚未選擇。</div>`;
+  }
+
+  const cards = sourceCards(sourceType, sourceId);
+  const recoveryCardName = sourceType === "WEAPON" ? selectedSourceRecoveryCardName(sourceId) : "";
+  if (cards.length === 0 && !recoveryCardName) {
+    return `<div class="loadout-card-list muted">此來源未設定帶入卡牌。</div>`;
+  }
+
+  return `
+    <div class="loadout-card-list">
+      ${cards.map((entry) => `
+        <span>${escapeHtml(cardDisplayName(entry.cardId))} x${entry.count}</span>
+      `).join("")}
+      ${recoveryCardName ? `<span>脫手恢復 ${escapeHtml(recoveryCardName)}</span>` : ""}
+    </div>
+  `;
+}
+
+function sourceCards(sourceType: LoadoutSourceType, sourceId: string): LoadoutCardDefinition[] {
+  return loadoutCards.filter((entry) =>
+    entry.sourceType === sourceType && entry.sourceId === sourceId && entry.count > 0
+  );
+}
+
+function sourceCardSummaryText(sourceType: LoadoutSourceType, sourceId: string): string {
+  const cards = sourceCards(sourceType, sourceId);
+  if (cards.length === 0) {
+    return "未設定來源牌";
+  }
+
+  return cards
+    .map((entry) => `${cardDisplayName(entry.cardId)} x${entry.count}`)
+    .join("、");
+}
+
+function selectedSourceRecoveryCardName(sourceId: string): string {
+  const source = loadoutSources[loadoutSourceKey("WEAPON", sourceId)];
+  return source?.recoveryCardId ? cardDisplayName(source.recoveryCardId) : "";
 }
 
 raceOptionsEl.addEventListener("change", (event) => {
@@ -600,6 +773,39 @@ raceOptionsEl.addEventListener("change", (event) => {
   selectedRaceId = target.value;
   clampAbilityScoresToSelectedRace();
   render();
+});
+
+loadoutOptionsEl.addEventListener("change", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLSelectElement && target.dataset.loadoutClass !== undefined) {
+    selectedClassId = target.value;
+    render();
+    return;
+  }
+
+  if (target instanceof HTMLSelectElement && target.dataset.loadoutWeapon) {
+    selectedWeaponIds = {
+      ...selectedWeaponIds,
+      [target.dataset.loadoutWeapon]: target.value
+    };
+    render();
+    return;
+  }
+
+  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+    return;
+  }
+
+  if (target.dataset.loadoutFeat !== undefined) {
+    selectedFeatIds = toggleSelectedId(selectedFeatIds, target.value, target.checked);
+    render();
+    return;
+  }
+
+  if (target.dataset.loadoutAdventure !== undefined) {
+    selectedAdventureSkillIds = toggleSelectedId(selectedAdventureSkillIds, target.value, target.checked);
+    render();
+  }
 });
 
 abilityControlsEl.addEventListener("click", (event) => {
@@ -661,6 +867,88 @@ function clampAbilityScoresToSelectedRace(): void {
   };
 }
 
+function ensureSelectedLoadoutDefaults(): void {
+  const grouped = groupedLoadoutSources();
+  selectedClassId = grouped.CLASS.some((source) => source.sourceId === selectedClassId)
+    ? selectedClassId
+    : grouped.CLASS[0]?.sourceId ?? "";
+  selectedFeatIds = selectedFeatIds.filter((id) =>
+    grouped.FEAT.some((source) => source.sourceId === id)
+  );
+  if (selectedFeatIds.length === 0 && grouped.FEAT[0]) {
+    selectedFeatIds = [grouped.FEAT[0].sourceId];
+  }
+  selectedAdventureSkillIds = selectedAdventureSkillIds.filter((id) =>
+    grouped.ADVENTURE_SKILL.some((source) => source.sourceId === id)
+  );
+
+  const selectedMainHand = selectedWeaponIds.MAIN_HAND;
+  selectedWeaponIds = {
+    ...selectedWeaponIds,
+    MAIN_HAND: grouped.WEAPON.some((source) => source.sourceId === selectedMainHand)
+      ? selectedMainHand
+      : grouped.WEAPON[0]?.sourceId ?? ""
+  };
+}
+
+function groupedLoadoutSources(): Record<LoadoutSourceType, LoadoutSourceDefinition[]> {
+  const grouped: Record<LoadoutSourceType, LoadoutSourceDefinition[]> = {
+    CLASS: [],
+    FEAT: [],
+    WEAPON: [],
+    ADVENTURE_SKILL: []
+  };
+
+  for (const source of Object.values(loadoutSources)) {
+    grouped[source.sourceType].push(source);
+  }
+
+  for (const sourceType of Object.keys(grouped) as LoadoutSourceType[]) {
+    grouped[sourceType].sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }
+
+  return grouped;
+}
+
+function selectedNonEmptyWeaponIds(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(selectedWeaponIds).filter(([, weaponId]) => weaponId.trim().length > 0)
+  );
+}
+
+function toggleSelectedId(selectedIds: string[], id: string, selected: boolean): string[] {
+  if (selected) {
+    return selectedIds.includes(id) ? selectedIds : [...selectedIds, id];
+  }
+
+  return selectedIds.filter((selectedId) => selectedId !== id);
+}
+
+function loadoutSummary(character: CharacterState): string {
+  const parts = [
+    character.classId ? sourceName("CLASS", character.classId) : "",
+    ...character.featIds.map((featId) => sourceName("FEAT", featId)),
+    ...character.adventureSkillIds.map((skillId) => sourceName("ADVENTURE_SKILL", skillId))
+  ].filter((part) => part.length > 0);
+
+  return parts.length > 0 ? parts.join(" · ") : "No loadout";
+}
+
+function weaponStatusSummary(character: CharacterState): string {
+  const weapons = Object.values(character.weaponSlots);
+  if (weapons.length === 0) {
+    return "Weapon -";
+  }
+
+  return weapons
+    .map((weapon) => `${sourceName("WEAPON", weapon.weaponId)} ${weapon.status}`)
+    .join(" · ");
+}
+
+function sourceName(sourceType: LoadoutSourceType, sourceId: string): string {
+  return loadoutSources[loadoutSourceKey(sourceType, sourceId)]?.name ?? sourceId;
+}
+
 function readCharacterConfig() {
   const character = tryCreateCharacter();
   if (!character) {
@@ -671,13 +959,27 @@ function readCharacterConfig() {
 
   return {
     raceId: selectedRaceId,
-    abilityScores
+    abilityScores,
+    ...(selectedClassId ? { classId: selectedClassId } : {}),
+    featIds: [...selectedFeatIds],
+    weaponIds: selectedNonEmptyWeaponIds(),
+    adventureSkillIds: [...selectedAdventureSkillIds]
   };
 }
 
 function tryCreateCharacter() {
   try {
-    return validateAndCreateCharacter({ raceId: selectedRaceId, abilityScores }, races);
+    return validateAndCreateCharacter(
+      {
+        raceId: selectedRaceId,
+        abilityScores,
+        ...(selectedClassId ? { classId: selectedClassId } : {}),
+        featIds: [...selectedFeatIds],
+        weaponIds: selectedNonEmptyWeaponIds(),
+        adventureSkillIds: [...selectedAdventureSkillIds]
+      },
+      races
+    );
   } catch {
     return null;
   }
@@ -721,17 +1023,25 @@ async function refreshCatalogFromWorkerUrl(): Promise<void> {
       version?: string;
       raceCount?: number;
       races?: Record<string, RaceDefinition>;
+      loadoutSources?: Record<string, LoadoutSourceDefinition>;
+      loadoutCards?: LoadoutCardDefinition[];
+      cardDefinitions?: Record<string, CardDefinition>;
     };
     if (catalog.races && Object.keys(catalog.races).length > 0) {
       races = catalog.races;
+      loadoutSources = catalog.loadoutSources ?? {};
+      loadoutCards = catalog.loadoutCards ?? [];
+      cardDefinitions = catalog.cardDefinitions ?? cardDefinitions;
+      ensureSelectedLoadoutDefaults();
       raceCatalogLoaded = true;
       clampAbilityScoresToSelectedRace();
       const raceCount = Object.keys(catalog.races).length;
+      const loadoutSourceCount = Object.keys(loadoutSources).length;
       const defaultRaceCount = Object.keys(DEFAULT_RACES).length;
       const syncHint = raceCount === defaultRaceCount
         ? " If external races were updated, run card catalog sync."
         : "";
-      raceCatalogStatus = `Loaded ${raceCount} races from ${catalog.source ?? "catalog"} ${catalog.version ?? ""}.${syncHint}`;
+      raceCatalogStatus = `Loaded ${raceCount} races and ${loadoutSourceCount} loadout sources from ${catalog.source ?? "catalog"} ${catalog.version ?? ""}.${syncHint}`;
     } else {
       raceCatalogLoaded = false;
       raceCatalogStatus = "Catalog response has no races. Using local default races.";
@@ -802,6 +1112,10 @@ function hydrateVisibleCard(card: VisibleCardInstance): VisibleCardInstance {
     resourceCosts: card.resourceCosts ?? definition.resourceCosts,
     actionTags: card.actionTags ?? definition.actionTags
   };
+}
+
+function cardDisplayName(cardId: string): string {
+  return cardDefinitions[cardId]?.name ?? cardId;
 }
 
 function renderResourceCostTags(card: VisibleCardInstance): string {
@@ -891,6 +1205,14 @@ function getPileView(pileKey: string): { label: string; count: number; cards: Vi
       label: "消耗牌堆",
       count: localState.zones.exhaustCounts[playerId] ?? 0,
       cards: localState.zones.exhaust[playerId] ?? []
+    };
+  }
+
+  if (pileKey === "unavailable") {
+    return {
+      label: "不可用牌堆",
+      count: localState.zones.unavailableCounts[playerId] ?? 0,
+      cards: localState.zones.unavailable[playerId] ?? []
     };
   }
 
