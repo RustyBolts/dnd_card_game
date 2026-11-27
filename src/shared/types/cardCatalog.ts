@@ -1,5 +1,6 @@
-import type { CardDefinition } from "./card.js";
+import type { CardDefinition, HiddenDeckPile } from "./card.js";
 import type { RaceDefinition } from "./character.js";
+import type { LoadoutCardDefinition, LoadoutSourceDefinition } from "./loadout.js";
 
 export type CardTransformScope = "OWNER_HAND";
 
@@ -15,10 +16,15 @@ export type CardTransformRule = {
   revertTiming: CardTransformRevertTiming;
 };
 
+export type HiddenDeckCardIds = Record<HiddenDeckPile, string[]>;
+
 export type CardCatalog = {
   version: string;
   cardDefinitions: Record<string, CardDefinition>;
   starterDeckCardIds: string[];
+  hiddenDeckCardIds?: HiddenDeckCardIds;
   transformRules: CardTransformRule[];
   races?: Record<string, RaceDefinition>;
+  loadoutSources?: Record<string, LoadoutSourceDefinition>;
+  loadoutCards?: LoadoutCardDefinition[];
 };

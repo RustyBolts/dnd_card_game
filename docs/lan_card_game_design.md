@@ -488,6 +488,9 @@ type GameState = {
     prepared: Record<string, CardInstance[]>
     temporary: Record<string, CardInstance[]>
     exhaust: Record<string, CardInstance[]>
+    nature: Record<string, CardInstance[]>
+    knowledge: Record<string, CardInstance[]>
+    environment: Record<string, CardInstance[]>
     board: CardInstance[]
     graveyard: CardInstance[]
     exile: CardInstance[]
@@ -540,7 +543,7 @@ type CardInstance = {
   instanceId: string
   cardId: string
   ownerId: string
-  zone: 'DECK' | 'HAND' | 'BOARD' | 'PREPARED' | 'RESOLVING' | 'TEMPORARY' | 'EXHAUST' | 'GRAVEYARD' | 'EXILE'
+  zone: 'DECK' | 'HAND' | 'BOARD' | 'PREPARED' | 'RESOLVING' | 'TEMPORARY' | 'EXHAUST' | 'NATURE' | 'KNOWLEDGE' | 'ENVIRONMENT' | 'GRAVEYARD' | 'EXILE'
 }
 ```
 
@@ -558,6 +561,7 @@ type CardEffectDefinition =
   | { type: 'DAMAGE'; value: number; count?: number }
   | { type: 'HEAL'; value: number }
   | { type: 'DRAW'; count: number }
+  | { type: 'DRAW_FROM_PILE'; pile: 'DECK' | 'TEMPORARY' | 'EXHAUST' | 'GRAVEYARD' | 'NATURE' | 'KNOWLEDGE' | 'ENVIRONMENT'; count: number }
   | { type: 'LOSE_HP'; value: number }
   | { type: 'LOSE_ENERGY'; value: number }
   | { type: 'ADD_CARD_TO_HAND'; cardId: string; count: number }
@@ -579,6 +583,8 @@ PLAY_CARD Command
 ```
 
 `ADD_CARD_TO_HAND` 會對解析後的每名效果目標各加入 `count` 張 `cardId`。例如偷襲指定敵人時可加入 2 張出血；隱匿使用 `SELF` 目標時可向自己加入 1 張躲藏。新增牌保留其完整卡牌定義，因此躲藏後續被 `consumeCardCount` 消耗時，仍會依 `READY_ACTION` 規則進入準備牌堆。
+
+`DRAW_FROM_PILE` 會從指定牌堆抽牌到結算玩家手牌。`DECK` 沿用原始牌庫抽牌與暫存牌堆回收規則；`NATURE`、`KNOWLEDGE`、`ENVIRONMENT` 是隱藏牌庫，只同步張數，不提供預知。
 
 ---
 

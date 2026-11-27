@@ -1,5 +1,6 @@
 import type {
   CardDefinition,
+  CardDrawPile,
   CardEffectDefinition,
   CardInstance
 } from "../types/card.js";
@@ -19,7 +20,8 @@ import type { GameState } from "../types/game.js";
 
 export type DrawCardsFn = (
   playerId: string,
-  count: number
+  count: number,
+  pile?: CardDrawPile
 ) => Array<CardDrawnEvent | DeckRecycledEvent>;
 
 export type AddCardsToHandFn = (
@@ -27,6 +29,17 @@ export type AddCardsToHandFn = (
   cardId: string,
   count: number
 ) => CardAddedToHandEvent[];
+
+export type DisarmRandomWeaponFn = (
+  playerId: string,
+  targetId: string,
+  sourceCard: CardInstance
+) => GameEvent[];
+
+export type ReequipWeaponFn = (
+  playerId: string,
+  sourceCard: CardInstance
+) => GameEvent[];
 
 export type BeforeDamageHitResult = {
   prevented: boolean;
@@ -48,6 +61,8 @@ export type EffectContext = {
   nextSeq: () => number;
   drawCards: DrawCardsFn;
   addCardsToHand: AddCardsToHandFn;
+  disarmRandomWeapon?: DisarmRandomWeaponFn;
+  reequipWeapon?: ReequipWeaponFn;
   beforeDamageHit?: BeforeDamageHitFn;
 };
 
@@ -83,6 +98,25 @@ export function resolveCardEffect(context: EffectContext): GameEvent[] {
 
   if (effect.type === "ADD_CARD_TO_HAND") {
     return resolveAddCardsToHand(effect, context);
+  }
+
+  if (effect.type === "DISARM_RANDOM_WEAPON") {
+    const targetIds = getTargetIds(context);
+    if (targetIds.length === 0) {
+      throw new Error("No valid target for disarm effect.");
+    }
+
+    return targetIds.flatMap((targetId) =>
+      context.disarmRandomWeapon?.(context.playerId, targetId, context.sourceCard) ?? []
+    );
+  }
+
+  if (effect.type === "REEQUIP_WEAPON") {
+    return context.reequipWeapon?.(context.playerId, context.sourceCard) ?? [];
+  }
+
+  if (effect.type === "DRAW_FROM_PILE") {
+    return context.drawCards(context.playerId, effect.count, effect.pile);
   }
 
   if (effect.type === "NONE") {

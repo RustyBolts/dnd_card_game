@@ -15,8 +15,11 @@ const host = args.get("host") ?? process.env.HOST;
 const cardCatalog = loadCardCatalogForHost({
   cardsCsvPath: args.get("cards-csv"),
   starterDeckCsvPath: args.get("starter-deck-csv"),
+  hiddenDecksCsvPath: args.get("hidden-decks-csv"),
   transformRulesCsvPath: args.get("transform-rules-csv"),
   racesCsvPath: args.get("races-csv"),
+  loadoutSourcesCsvPath: args.get("loadout-sources-csv"),
+  loadoutCardsCsvPath: args.get("loadout-cards-csv"),
   version: args.get("card-catalog-version")
 });
 

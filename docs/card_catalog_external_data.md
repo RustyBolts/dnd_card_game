@@ -11,7 +11,7 @@ Google Spreadsheet
   -> Worker 驗證 CSV
   -> Worker 將 active catalog JSON 寫入 Cloudflare KV
   -> 新的 Durable Object 房間從 KV 載入 active catalog
-  -> GAME_STATE_SYNC 帶出 cardDefinitions 與 cardCatalogVersion
+  -> GAME_STATE_SYNC 帶出 cardDefinitions、loadoutSources、loadoutCards 與 cardCatalogVersion
 ```
 
 已經開始或已經初始化的房間不會即時重載卡表。房間會鎖定初始化當下的 catalog version，避免一場遊戲打到一半時因為 Google Sheet 被修改而改變卡片規則。
@@ -22,22 +22,28 @@ Google Spreadsheet
 
 - `data/cards.csv`
 - `data/starter_deck.csv`
+- `data/hidden_decks.csv`（可選）
 - `data/transform_rules.csv`（可選）
 - `data/races.csv`（可選）
+- `data/loadout_sources.csv`（可選）
+- `data/loadout_cards.csv`（可選）
 
 `data/` 已加入 `.gitignore`，不納入 git，也不是 Cloudflare runtime 的必要資料來源。Cloudflare Worker 實際讀取的是 `wrangler.toml` / Worker variables 中設定的 Google Spreadsheet CSV URL。
 
-Google Spreadsheet 建議建立四個工作表：
+Google Spreadsheet 建議建立七個工作表：
 
 - `cards`
 - `starter_deck`
+- `hidden_decks`（可選）
 - `transform_rules`（可選）
 - `races`（可選）
+- `loadout_sources`（可選）
+- `loadout_cards`（可選）
 
 ### `cards` 欄位
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardId,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
+cardId,name,cost,type,description,effectType,effectValue,effectCount,effectPile,effectCardId,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
 ```
 
 - `cardId`：穩定唯一 ID，牌組和遊戲狀態都用這個 ID。
@@ -45,9 +51,10 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardI
 - `cost`：整數，必須 >= 0。
 - `type`：`ATTACK`、`SKILL`、`MAGE`、`ITEM` 或 `STATUS`。
 - `description`：顯示文字。
-- `effectType`：`NONE`、`DAMAGE`、`HEAL`、`DRAW`、`LOSE_HP`、`LOSE_ENERGY` 或 `ADD_CARD_TO_HAND`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。`LOSE_HP` 也接受 `HP_LOSS` 等別名；`LOSE_ENERGY` 也接受 `ENERGY_LOSS` 等別名；`ADD_CARD_TO_HAND` 也接受 `ADD_TO_HAND`。
-- `effectValue`：`DAMAGE`、`HEAL`、`LOSE_HP`、`LOSE_ENERGY` 使用的數值。
-- `effectCount`：`DAMAGE` 使用的攻擊次數、`DRAW` 使用的抽牌張數，或 `ADD_CARD_TO_HAND` 對每名效果目標加入的張數，必須至少為 1。`DAMAGE` 留空時視為攻擊 1 次。
+- `effectType`：`NONE`、`DAMAGE`、`HEAL`、`DRAW`、`DRAW_FROM_PILE`、`LOSE_HP`、`LOSE_ENERGY`、`ADD_CARD_TO_HAND`、`DISARM_RANDOM_WEAPON` 或 `REEQUIP_WEAPON`。`NONE` 適合只用來觸發外部規則、自己沒有直接效果的卡。`DRAW_FROM_PILE` 也接受 `DRAW_FROM`、`DRAW_PILE`、`從牌堆抽牌` 等別名；`LOSE_HP` 也接受 `HP_LOSS` 等別名；`LOSE_ENERGY` 也接受 `ENERGY_LOSS` 等別名；`ADD_CARD_TO_HAND` 也接受 `ADD_TO_HAND`；`DISARM_RANDOM_WEAPON` 也接受 `繳械`；`REEQUIP_WEAPON` 也接受 `重新裝備`、`重新上手`。
+- `effectValue`：`DAMAGE`、`HEAL`、`LOSE_HP`、`LOSE_ENERGY` 使用的數值；`DRAW_FROM_PILE` 若沒有 `effectPile` 欄位，也可以暫時把牌堆名稱放在這裡。
+- `effectCount`：`DAMAGE` 使用的攻擊次數、`DRAW` / `DRAW_FROM_PILE` 使用的抽牌張數，或 `ADD_CARD_TO_HAND` 對每名效果目標加入的張數，必須至少為 1。`DAMAGE` 留空時視為攻擊 1 次。
+- `effectPile`：`DRAW_FROM_PILE` 必填，指定抽牌來源。支援 `DECK` / `牌庫`、`TEMPORARY` / `暫存牌堆`、`EXHAUST` / `消耗牌堆`、`GRAVEYARD` / `棄牌堆`、`NATURE` / `自然`、`KNOWLEDGE` / `知識`、`ENVIRONMENT` / `環境`。若 CSV 還沒有此欄位，可用 `effectValue` 放牌堆名稱。
 - `effectCardId`：`ADD_CARD_TO_HAND` 必填，指定要建立並加入手牌的卡牌 ID；必須存在於同一版本啟用中的 `cards`。
 - `targetSelection`：`NONE`、`SINGLE` 或 `GROUP`。
 - `targetScope`：`SELF`、`ALLY`、`ENEMY` 或 `ANY`。
@@ -71,6 +78,8 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardI
 
 `ADD_CARD_TO_HAND` 不會從牌庫抽牌，而是由 Host/Worker 為每張牌建立新的 instance 並直接加入效果目標的手牌。`targetSelection=SINGLE,targetScope=ENEMY` 可讓偷襲向指定敵人加入出血；`targetSelection=NONE,targetScope=SELF` 可讓隱匿向自己加入躲藏。新增牌的 `cardId` 只會透過私有事件提供給手牌持有者。
 
+`DRAW_FROM_PILE` 會在卡牌結算時，從指定牌堆抽出 `effectCount` 張牌並加入結算玩家手牌；抽不到足夠張數時會抽到該牌堆耗盡為止。`DECK` 代表原始牌庫，沿用既有抽牌規則，牌庫空時只會把暫存牌堆洗回原始牌庫。`TEMPORARY`、`EXHAUST`、`GRAVEYARD`、`NATURE`、`KNOWLEDGE`、`ENVIRONMENT` 不會觸發這個回收流程。自然、知識、環境是隱藏牌庫，`GAME_STATE_SYNC` 只同步張數，不同步卡面；感知調整值「預知」只會查看原始牌庫 `DECK`，不會查看這三個隱藏牌庫。
+
 `END_TURN_STATUS` / `回合結束時觸發其他狀態` 不能和其他動作標籤並存，只能用在 `STATUS` 卡，且必須搭配作用於自己的 `ADD_CARD_TO_HAND`；`effectCardId` 也必須指向另一張 `STATUS` 卡。玩家完成回合末棄牌後，Host/Worker 會掃描仍在該玩家手牌中的這類卡，逐張觸發新增狀態牌效果，再結束回合。掃描開始後才新增的牌不會在同一回合末再次觸發。帶此標籤的卡直接出牌或被棄牌時不執行 `ADD_CARD_TO_HAND`，只依牌面 `consumable` 決定進暫存或消耗牌堆。觸發事件與來源 instance 關聯不會公開給其他玩家。
 
 `BONUS_ACTION` / `附贈動作` 表示這張卡可直接出牌，也可以在棄牌動作發生時作為附贈動作觸發。附贈動作觸發時，Host/Worker 會先驗證目標，再將卡牌標記為結算中，發出 `CARD_DISCARDED` 與 `CARD_ACTION_TRIGGERED`，並以 0 能量消耗解析該卡原本的 `effect`。結算區是 Host/Worker 解析期間的內部暫存，不會出現在 `GAME_STATE_SYNC` 的牌堆資料中。效果與變化檢查完成後會發出 `CARD_RESOLVED`，目前附贈棄牌觸發後會移入暫存牌堆。若該卡需要指定目標，`DISCARD_CARD` command 必須帶 `targetId`。沒有觸發附贈動作的普通棄牌會直接移入暫存牌堆，不進入結算流程。目前前端只在點擊 `End Turn` 後的棄牌階段顯示 `Discard` 按鈕，讓玩家逐張棄牌並選目標；主階段不顯示常駐棄牌按鈕，之後可由卡牌或規則打開特定棄牌動作窗口。
@@ -84,24 +93,25 @@ cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardI
 範例：
 
 ```txt
-cardId,name,cost,type,description,effectType,effectValue,effectCount,effectCardId,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
-quick_shot,快速射擊,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,,SINGLE,ENEMY,true,,,,附贈動作,true
-combo,連擊,2,ATTACK,對一名目標造成 2 次 3 點傷害。,DAMAGE,3,2,,SINGLE,ENEMY,true,,,,,true
-riposte,反擊刺擊,1,ATTACK,抵抗該次傷害並對攻擊者造成 1 點傷害。,DAMAGE,1,,,SINGLE,ENEMY,true,true,,,反應動作,true
-counter_jab,反制打擊,1,SKILL,受到技能或魔法指定時對施放者造成 2 點傷害。,DAMAGE,2,,,SINGLE,ENEMY,true,,,,反制動作,true
-guarded_recovery,戒備恢復,1,SKILL,直接恢復 3 點 HP；被消耗時改為下回合開始恢復。,HEAL,3,,,NONE,SELF,false,,,,準備動作,true
-blood_rite,血祭儀式,0,SKILL,支付 3 HP 並消耗 2 張手牌。,DRAW,,1,,NONE,SELF,false,,2,3,,true
-sneak_attack,偷襲,1,ATTACK,指定目標獲得 2 張出血。,ADD_CARD_TO_HAND,,2,bleeding,SINGLE,ENEMY,true,,,,,true
-stealth,隱匿,1,SKILL,自己獲得 1 張躲藏。,ADD_CARD_TO_HAND,,1,hide,NONE,SELF,false,,,,,true
-hide,躲藏,1,SKILL,抵抗一次任意數值的傷害。,NONE,,,,NONE,SELF,false,true,,,反應動作,true
-ignited,點燃,2,STATUS,回合結束時若仍在手牌則加入 3 張灼傷。,ADD_CARD_TO_HAND,,3,burn,NONE,SELF,false,true,,,回合結束時觸發其他狀態,true
-burn,灼傷,1,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,NONE,SELF,false,true,,,,true
-bleeding,出血,9,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,NONE,SELF,false,,,,,true
-clumsy,笨拙,4,STATUS,結算時若有剩餘能量則失去 1 點能量。,LOSE_ENERGY,1,,,NONE,SELF,false,true,,,,true
-slime,黏液,1,STATUS,結算時抽 1 張牌。,DRAW,,1,,NONE,SELF,false,true,,,,true
+cardId,name,cost,type,description,effectType,effectValue,effectCount,effectPile,effectCardId,targetSelection,targetScope,targetRequired,consumable,consumeCardCount,hpCost,actionTags,enabled
+quick_shot,快速射擊,2,ATTACK,對一名目標造成 2 點傷害。,DAMAGE,2,,,,SINGLE,ENEMY,true,,,,附贈動作,true
+combo,連擊,2,ATTACK,對一名目標造成 2 次 3 點傷害。,DAMAGE,3,2,,,SINGLE,ENEMY,true,,,,,true
+riposte,反擊刺擊,1,ATTACK,抵抗該次傷害並對攻擊者造成 1 點傷害。,DAMAGE,1,,,,SINGLE,ENEMY,true,true,,,反應動作,true
+counter_jab,反制打擊,1,SKILL,受到技能或魔法指定時對施放者造成 2 點傷害。,DAMAGE,2,,,,SINGLE,ENEMY,true,,,,反制動作,true
+guarded_recovery,戒備恢復,1,SKILL,直接恢復 3 點 HP；被消耗時改為下回合開始恢復。,HEAL,3,,,,NONE,SELF,false,,,,準備動作,true
+blood_rite,血祭儀式,0,SKILL,支付 3 HP 並消耗 2 張手牌。,DRAW,,1,,,NONE,SELF,false,,2,3,,true
+verdant_call,自然呼喚,0,SKILL,從自然牌庫抽 2 張。,DRAW_FROM_PILE,,2,自然,,NONE,SELF,false,,,,,true
+sneak_attack,偷襲,1,ATTACK,指定目標獲得 2 張出血。,ADD_CARD_TO_HAND,,2,,bleeding,SINGLE,ENEMY,true,,,,,true
+stealth,隱匿,1,SKILL,自己獲得 1 張躲藏。,ADD_CARD_TO_HAND,,1,,hide,NONE,SELF,false,,,,,true
+hide,躲藏,1,SKILL,抵抗一次任意數值的傷害。,NONE,,,,,NONE,SELF,false,true,,,反應動作,true
+ignited,點燃,2,STATUS,回合結束時若仍在手牌則加入 3 張灼傷。,ADD_CARD_TO_HAND,,3,,burn,NONE,SELF,false,true,,,回合結束時觸發其他狀態,true
+burn,灼傷,1,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,,NONE,SELF,false,true,,,,true
+bleeding,出血,9,STATUS,結算時失去 1 HP。,LOSE_HP,1,,,,NONE,SELF,false,,,,,true
+clumsy,笨拙,4,STATUS,結算時若有剩餘能量則失去 1 點能量。,LOSE_ENERGY,1,,,,NONE,SELF,false,true,,,,true
+slime,黏液,1,STATUS,結算時抽 1 張牌。,DRAW,,1,,,NONE,SELF,false,true,,,,true
 ```
 
-為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有 `effectCardId`、沒有目標欄位、沒有 `consumable` 欄位、沒有 `consumeCardCount` / `hpCost` 欄位或沒有 `actionTags` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL`、`DRAW`、`LOSE_HP`、`LOSE_ENERGY` 與 `ADD_CARD_TO_HAND` 會推導成作用於自己且不需指定目標；只有使用 `ADD_CARD_TO_HAND` 時才必須提供 `effectCardId`。未提供 `consumable` 時會視為普通牌，未提供資源代價時只消耗能量，未提供 `actionTags` 時代表沒有微操作標籤。
+為了讓既有 Google Spreadsheet / KV catalog 有遷移時間，程式仍接受沒有 `effectPile`、沒有 `effectCardId`、沒有目標欄位、沒有 `consumable` 欄位、沒有 `consumeCardCount` / `hpCost` 欄位或沒有 `actionTags` 欄位的舊 `cards` CSV：`DAMAGE` 會推導成敵人單體必填，`HEAL`、`DRAW`、`DRAW_FROM_PILE`、`LOSE_HP`、`LOSE_ENERGY` 與 `ADD_CARD_TO_HAND` 會推導成作用於自己且不需指定目標；只有使用 `ADD_CARD_TO_HAND` 時才必須提供 `effectCardId`。使用 `DRAW_FROM_PILE` 時必須提供來源牌堆；若舊 CSV 還沒有 `effectPile` 欄位，可以先把牌堆名稱放在 `effectValue`。未提供 `consumable` 時會視為普通牌，未提供資源代價時只消耗能量，未提供 `actionTags` 時代表沒有微操作標籤。
 
 ### `starter_deck` 欄位
 
@@ -111,6 +121,29 @@ cardId,count
 
 - `cardId` 必須存在於啟用中的 `cards`。
 - `count` 會展開成 starter deck 中的卡片張數。
+
+### `hidden_decks` 欄位
+
+```txt
+pile,cardId,count,enabled
+```
+
+- `pile`：隱藏牌庫名稱，只能是 `NATURE` / `自然`、`KNOWLEDGE` / `知識` 或 `ENVIRONMENT` / `環境`。
+- `cardId`：必須存在於啟用中的 `cards`。
+- `count`：會展開成該隱藏牌庫中的卡片張數。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用；欄位可留空。
+
+每位玩家開局時都會各自建立一份自然、知識、環境牌庫並洗牌。這些牌庫只同步張數，不同步卡面，也不會被「預知」查看。`hidden_decks` 只決定隱藏牌庫內容；要從其中抽牌，仍需在 `cards` 中建立 `effectType=DRAW_FROM_PILE` 並指定對應的 `effectPile`。
+
+範例：
+
+```txt
+pile,cardId,count,enabled
+KNOWLEDGE,ancient_scroll,3,true
+KNOWLEDGE,arcane_note,2,true
+NATURE,healing_herb,2,true
+ENVIRONMENT,storm_front,1,true
+```
 
 ### `transform_rules` 欄位
 
@@ -172,6 +205,54 @@ gnome,地侏,20,SKIN,0,15,18,20,20,18,15,20,20,20,20,20,20,true
 orc,獸人,25,FUR,0,20,18,15,15,15,20,20,20,20,20,20,20,true
 ```
 
+### `loadout_sources` 欄位
+
+```txt
+sourceType,sourceId,name,recoveryCardId,enabled
+```
+
+- `sourceType`：`CLASS` / `職業`、`FEAT` / `專長`、`WEAPON` / `武器` 或 `ADVENTURE_SKILL` / `冒險技能`。
+- `sourceId`：穩定唯一 ID，例如 `fighter`、`brawler`、`longsword`。
+- `name`：顯示名稱，例如 `戰士`、`鬥毆高手`、`長劍`。
+- `recoveryCardId`：只支援 `WEAPON`。武器脫手時，Host/Worker 會生成這張恢復卡並放入暫存牌堆；若提供此欄位，必須指向同版本已啟用且 `effectType=REEQUIP_WEAPON` 的卡牌；CSV 同步與 KV JSON 載入都會驗證，指向其他效果會被拒絕。此欄位仍可省略；省略時武器脫手不會生成恢復卡。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+範例：
+
+```txt
+sourceType,sourceId,name,recoveryCardId,enabled
+CLASS,fighter,戰士,,true
+FEAT,brawler,鬥毆高手,,true
+WEAPON,longsword,長劍,longsword,true
+```
+
+### `loadout_cards` 欄位
+
+```txt
+sourceType,sourceId,cardId,count,enabled
+```
+
+- `sourceType` 與 `sourceId` 必須對應 `loadout_sources` 中已啟用的來源。
+- `cardId` 必須存在於同版本已啟用的 `cards`。
+- `count`：該來源加入開局牌庫的張數，必須 >= 1。
+- `enabled`：除了 `false`、`0`、`no` 以外都視為啟用。
+
+前端等待室會依職業、專長、武器、冒險技能的順序讀取 `loadout_sources` 與 `loadout_cards`，在玩家選擇時顯示該來源會加入的卡牌與張數。
+
+範例：
+
+```txt
+sourceType,sourceId,cardId,count,enabled
+CLASS,fighter,disarm,2,true
+CLASS,fighter,charge,3,true
+FEAT,brawler,punch,3,true
+FEAT,brawler,feint,2,true
+WEAPON,longsword,slash,3,true
+WEAPON,longsword,thrust,2,true
+```
+
+Host/Worker 開局時會以 `starter_deck` 建立基本牌庫，再依玩家角色設定的職業、專長、武器與冒險技能追加來源牌。每張來源牌都會記錄來源綁定；例如長劍來源的 `slash` / `thrust` 會帶同一個武器 binding。`DISARM_RANDOM_WEAPON` 使目標武器脫手時，Host/Worker 會把該 binding 的武器來源牌從可用牌堆移到不可用牌堆，並生成 `recoveryCardId` 指定的長劍牌到暫存牌堆。這張恢復卡之後依一般暫存牌堆規則洗回牌庫；打出後觸發 `REEQUIP_WEAPON`，武器重新裝備，對應來源牌洗回牌庫。
+
 ## 本機 Node Host
 
 `npm run dev:host` 預設讀取 seed CSV：
@@ -183,11 +264,11 @@ npm run dev:host -- --port 7777
 測試其他 CSV 匯出檔時可以指定路徑：
 
 ```bash
-npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --transform-rules-csv /path/to/transform_rules.csv --races-csv /path/to/races.csv
+npm run dev:host -- --cards-csv /path/to/cards.csv --starter-deck-csv /path/to/starter_deck.csv --hidden-decks-csv /path/to/hidden_decks.csv --transform-rules-csv /path/to/transform_rules.csv --races-csv /path/to/races.csv --loadout-sources-csv /path/to/loadout_sources.csv --loadout-cards-csv /path/to/loadout_cards.csv
 ```
 
-如果 `cards.csv` 與 `starter_deck.csv` 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個，或只有 `transform_rules.csv`，啟動會失敗，因為 card catalog 不完整。`transform_rules.csv` 可省略；省略時代表沒有外部轉換規則。
-`races.csv` 可省略；省略時代表使用內建種族。
+如果 `cards.csv` 與 `starter_deck.csv` 都不存在，Host 會 fallback 到程式內建的 default catalog。若只存在其中一個，或只有 `hidden_decks.csv` / `transform_rules.csv`，啟動會失敗，因為 card catalog 不完整。`hidden_decks.csv` 可省略；省略時代表三個隱藏牌庫為空。`transform_rules.csv` 可省略；省略時代表沒有外部轉換規則。
+`races.csv`、`loadout_sources.csv` 與 `loadout_cards.csv` 可省略；省略 `races.csv` 時代表使用內建種族，省略 loadout 檔時代表不從外部追加職業/專長/武器/冒險技能來源牌。
 
 ## Cloudflare Worker 設定
 
@@ -202,12 +283,15 @@ CARD_CATALOG_KV
 ```txt
 CARD_CARDS_CSV_URL=<published cards CSV URL>
 CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+CARD_HIDDEN_DECKS_CSV_URL=<published hidden_decks CSV URL>
 CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
 CARD_RACES_CSV_URL=<published races CSV URL>
+CARD_LOADOUT_SOURCES_CSV_URL=<published loadout_sources CSV URL>
+CARD_LOADOUT_CARDS_CSV_URL=<published loadout_cards CSV URL>
 CARD_CATALOG_KEY=card-catalog:active
 ```
 
-`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_RACES_CSV_URL` 時使用內建種族，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
+`CARD_HIDDEN_DECKS_CSV_URL`、`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL`、`CARD_LOADOUT_SOURCES_CSV_URL`、`CARD_LOADOUT_CARDS_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 `CARD_HIDDEN_DECKS_CSV_URL` 時代表三個隱藏牌庫開局為空，沒有 `CARD_TRANSFORM_RULES_CSV_URL` 時代表沒有外部轉換規則，沒有 `CARD_RACES_CSV_URL` 時使用內建種族，沒有 loadout URL 時代表不從外部追加職業/專長/武器/冒險技能來源牌，沒有 `CARD_CATALOG_KEY` 時程式會使用 `card-catalog:active`。
 
 如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 

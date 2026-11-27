@@ -119,7 +119,10 @@ export function createDefaultCharacterConfig(raceId = "human"): CharacterConfig 
       wisdom: 12,
       charisma: 12,
       constitution: 10
-    }
+    },
+    featIds: [],
+    weaponIds: {},
+    adventureSkillIds: []
   };
 }
 
@@ -156,10 +159,28 @@ export function validateAndCreateCharacter(
 
   const abilityModifiers = calculateAbilityModifiers(config.abilityScores);
   const maxHp = race.baseHp + abilityModifiers.constitution;
+  const classId = normalizeOptionalId(config.classId);
+  const featIds = normalizeIdList(config.featIds);
+  const weaponIds = normalizeWeaponIds(config.weaponIds);
+  const adventureSkillIds = normalizeIdList(config.adventureSkillIds);
 
   return {
     raceId: race.raceId,
     abilityScores: { ...config.abilityScores },
+    ...(classId ? { classId } : {}),
+    featIds,
+    weaponIds,
+    adventureSkillIds,
+    weaponSlots: Object.fromEntries(
+      Object.entries(weaponIds).map(([slotId, weaponId]) => [
+        slotId,
+        {
+          weaponId,
+          bindingId: createWeaponBindingId(slotId, weaponId),
+          status: "EQUIPPED" as const
+        }
+      ])
+    ),
     abilityModifiers,
     baseHp: race.baseHp,
     maxHp,
@@ -193,4 +214,25 @@ function assertCompleteAbilityScores(scores: AbilityScores): void {
       throw new Error(`${ability} is required.`);
     }
   }
+}
+
+function normalizeOptionalId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeIdList(value: string[] | undefined): string[] {
+  const ids = value?.map((id) => id.trim()).filter((id) => id.length > 0) ?? [];
+  return [...new Set(ids)];
+}
+
+function normalizeWeaponIds(value: Record<string, string> | undefined): Record<string, string> {
+  const entries = Object.entries(value ?? {})
+    .map(([slotId, weaponId]) => [slotId.trim(), weaponId.trim()] as const)
+    .filter(([slotId, weaponId]) => slotId.length > 0 && weaponId.length > 0);
+  return Object.fromEntries(entries);
+}
+
+function createWeaponBindingId(slotId: string, weaponId: string): string {
+  return `weapon:${slotId}:${weaponId}`;
 }

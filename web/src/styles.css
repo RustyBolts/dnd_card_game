@@ -218,9 +218,102 @@ h3 {
   font-size: 12px;
 }
 
+.loadout-options {
+  display: grid;
+  gap: 10px;
+}
+
+.loadout-flow {
+  display: grid;
+  gap: 12px;
+}
+
+.loadout-step {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(245, 243, 232, 0.12);
+  border-radius: 6px;
+  background: #171a16;
+}
+
+.loadout-step-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.loadout-step-heading span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(172, 210, 126, 0.45);
+  border-radius: 50%;
+  color: #acd27e;
+  font-size: 12px;
+}
+
+.loadout-select select {
+  width: 100%;
+}
+
+.loadout-card-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.loadout-card-list span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(245, 243, 232, 0.08);
+  color: #d8d6c7;
+  font-size: 12px;
+}
+
+.loadout-card-list.muted {
+  display: block;
+  color: #8e9188;
+  font-size: 12px;
+}
+
+.loadout-checks {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.loadout-choice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.loadout-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+
+.loadout-choice small {
+  display: block;
+  margin-top: 3px;
+  color: #8e9188;
+  font-size: 12px;
+}
+
+.ability-section {
+  grid-column: 1 / -1;
+}
+
 .ability-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -634,6 +727,10 @@ h3 {
   .lobby-controls,
   .lobby-group:nth-of-type(n + 2) .lobby-controls {
     grid-template-columns: 1fr;
+  }
+
+  .ability-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

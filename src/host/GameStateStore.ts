@@ -13,23 +13,41 @@ import {
   calculateStatusRetainCount,
   type HandDiscardRequirements
 } from "../shared/rules/handRetention.js";
-import type { CardActionTag, CardDefinition, CardInstance, CardZone } from "../shared/types/card.js";
-import type { CardCatalog, CardTransformRevertTiming, CardTransformRule } from "../shared/types/cardCatalog.js";
+import type { CardActionTag, CardDefinition, CardDrawPile, CardInstance, CardZone } from "../shared/types/card.js";
+import type {
+  CardCatalog,
+  CardTransformRevertTiming,
+  CardTransformRule,
+  HiddenDeckCardIds
+} from "../shared/types/cardCatalog.js";
 import type { CharacterConfig, CharacterState, RaceDefinition } from "../shared/types/character.js";
 import type { GameState, PlayerState } from "../shared/types/game.js";
+import {
+  loadoutSourceKey,
+  type CardOrigin,
+  type LoadoutCardDefinition,
+  type LoadoutSourceDefinition,
+  type LoadoutSourceType,
+  type WeaponSlotState
+} from "../shared/types/loadout.js";
 import type {
   CardAddedToHandEvent,
   CardConsumedEvent,
+  CardCreatedEvent,
   CardDrawnEvent,
   CardActionTriggeredEvent,
   DamagePreventedEvent,
   CardResolvedEvent,
   CardTransformedEvent,
   DeckRecycledEvent,
+  EquipmentDroppedEvent,
+  EquipmentReequippedEvent,
   GameEvent,
   GameStateSyncEvent,
   HpPaidEvent,
-  JoinAcceptedEvent
+  JoinAcceptedEvent,
+  LoadoutCardsRestoredEvent,
+  LoadoutCardsSuppressedEvent
 } from "../shared/types/network.js";
 import { CommandError } from "./CommandError.js";
 import { DeckManager } from "./DeckManager.js";
@@ -65,13 +83,40 @@ type PlayResourcePayment = {
 };
 
 type ResolvedCardDestinationZone = Extract<CardZone, "TEMPORARY" | "EXHAUST">;
+type MovedLoadoutCardsResult = {
+  cardCount: number;
+  events: CardTransformedEvent[];
+};
+type PlayerOwnedZoneName =
+  | "deck"
+  | "hand"
+  | "prepared"
+  | "temporary"
+  | "exhaust"
+  | "nature"
+  | "knowledge"
+  | "environment";
+
+const PLAYER_OWNED_ZONE_NAMES: PlayerOwnedZoneName[] = [
+  "deck",
+  "hand",
+  "prepared",
+  "temporary",
+  "exhaust",
+  "nature",
+  "knowledge",
+  "environment"
+];
 
 export class GameStateStore {
   readonly cardDefinitions: Record<string, CardDefinition>;
   readonly cardCatalogVersion: string;
   readonly races: Record<string, RaceDefinition>;
+  readonly loadoutSources: Record<string, LoadoutSourceDefinition>;
 
   private readonly transformRules: CardTransformRule[];
+  private readonly hiddenDeckCardIds: HiddenDeckCardIds;
+  private readonly loadoutCards: LoadoutCardDefinition[];
   private readonly deckManager: DeckManager;
   private readonly snapshotService: SnapshotService;
   private readonly state: GameState;
@@ -85,7 +130,14 @@ export class GameStateStore {
     this.cardDefinitions = cardCatalog.cardDefinitions;
     this.cardCatalogVersion = cardCatalog.version;
     this.races = cardCatalog.races ?? DEFAULT_RACES;
+    this.loadoutSources = cardCatalog.loadoutSources ?? {};
     this.transformRules = cardCatalog.transformRules ?? [];
+    this.loadoutCards = cardCatalog.loadoutCards ?? [];
+    this.hiddenDeckCardIds = {
+      NATURE: [...(cardCatalog.hiddenDeckCardIds?.NATURE ?? [])],
+      KNOWLEDGE: [...(cardCatalog.hiddenDeckCardIds?.KNOWLEDGE ?? [])],
+      ENVIRONMENT: [...(cardCatalog.hiddenDeckCardIds?.ENVIRONMENT ?? [])]
+    };
     this.deckManager = new DeckManager(cardCatalog.starterDeckCardIds);
     this.snapshotService = new SnapshotService(this.cardDefinitions);
     this.state = {
@@ -103,6 +155,10 @@ export class GameStateStore {
         prepared: {},
         temporary: {},
         exhaust: {},
+        nature: {},
+        knowledge: {},
+        environment: {},
+        unavailable: {},
         board: [],
         graveyard: [],
         exile: []
@@ -169,6 +225,10 @@ export class GameStateStore {
     this.state.zones.prepared[playerId] = [];
     this.state.zones.temporary[playerId] = [];
     this.state.zones.exhaust[playerId] = [];
+    this.state.zones.nature[playerId] = [];
+    this.state.zones.knowledge[playerId] = [];
+    this.state.zones.environment[playerId] = [];
+    this.state.zones.unavailable[playerId] = [];
 
     return {
       player,
@@ -207,6 +267,7 @@ export class GameStateStore {
     }
 
     const character = this.createCharacter(characterConfig);
+    this.assertKnownLoadout(character);
     player.character = character;
     player.maxHp = character.maxHp;
     player.hp = character.maxHp;
@@ -312,6 +373,7 @@ export class GameStateStore {
     );
     const player = this.state.players[playerId];
 
+    this.assertSpecialCardCanResolve(playerId, card, definition);
     this.assertCanPayCardCosts(player, definition);
 
     if (preparedActionTag) {
@@ -453,6 +515,8 @@ export class GameStateStore {
         state: this.snapshotService.createVisibleState(this.state, playerId),
         cardDefinitions: this.cardDefinitions,
         races: this.races,
+        loadoutSources: this.loadoutSources,
+        loadoutCards: this.loadoutCards,
         cardCatalogVersion: this.cardCatalogVersion
       }
     };
@@ -487,13 +551,24 @@ export class GameStateStore {
       player.energy = 0;
       player.maxEnergy = BASE_MAX_ENERGY;
       player.drawPerTurn = BASE_TURN_DRAW_COUNT;
-      this.state.zones.deck[playerId] = this.deckManager.shuffle(
-        this.deckManager.buildStarterDeck(playerId)
-      );
+      this.state.zones.deck[playerId] = this.deckManager.shuffle([
+        ...this.deckManager.buildStarterDeck(playerId),
+        ...this.buildLoadoutDeck(playerId, character)
+      ]);
       this.state.zones.hand[playerId] = [];
       this.state.zones.prepared[playerId] = [];
       this.state.zones.temporary[playerId] = [];
       this.state.zones.exhaust[playerId] = [];
+      this.state.zones.unavailable[playerId] = [];
+      this.state.zones.nature[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.NATURE, playerId, "NATURE")
+      );
+      this.state.zones.knowledge[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.KNOWLEDGE, playerId, "KNOWLEDGE")
+      );
+      this.state.zones.environment[playerId] = this.deckManager.shuffle(
+        this.deckManager.buildCardPile(this.hiddenDeckCardIds.ENVIRONMENT, playerId, "ENVIRONMENT")
+      );
     }
 
     const firstPlayerId = this.state.playerOrder[0];
@@ -515,6 +590,62 @@ export class GameStateStore {
 
     events.push(...this.startTurn(firstPlayerId));
     return events;
+  }
+
+  private buildLoadoutDeck(playerId: string, character: CharacterState): CardInstance[] {
+    const cards: CardInstance[] = [];
+
+    if (character.classId) {
+      cards.push(...this.buildLoadoutSourceCards(playerId, "CLASS", character.classId, `class:${character.classId}`));
+    }
+
+    for (const featId of character.featIds) {
+      cards.push(...this.buildLoadoutSourceCards(playerId, "FEAT", featId, `feat:${featId}`));
+    }
+
+    for (const adventureSkillId of character.adventureSkillIds) {
+      cards.push(
+        ...this.buildLoadoutSourceCards(
+          playerId,
+          "ADVENTURE_SKILL",
+          adventureSkillId,
+          `adventure_skill:${adventureSkillId}`
+        )
+      );
+    }
+
+    for (const weapon of Object.values(character.weaponSlots)) {
+      cards.push(...this.buildLoadoutSourceCards(playerId, "WEAPON", weapon.weaponId, weapon.bindingId));
+    }
+
+    return cards;
+  }
+
+  private buildLoadoutSourceCards(
+    playerId: string,
+    sourceType: LoadoutSourceType,
+    sourceId: string,
+    bindingId: string
+  ): CardInstance[] {
+    const origin: CardOrigin = {
+      type: sourceType,
+      sourceId,
+      bindingId
+    };
+    const cards: CardInstance[] = [];
+
+    for (const entry of this.loadoutCards) {
+      if (entry.sourceType !== sourceType || entry.sourceId !== sourceId) {
+        continue;
+      }
+
+      this.getCardDefinition(entry.cardId);
+      for (let index = 0; index < entry.count; index += 1) {
+        cards.push(this.deckManager.createCard(entry.cardId, playerId, "DECK", origin));
+      }
+    }
+
+    return cards;
   }
 
   private startTurn(playerId: string): GameEvent[] {
@@ -544,16 +675,20 @@ export class GameStateStore {
     return events;
   }
 
-  private drawCards(playerId: string, count: number): Array<CardDrawnEvent | DeckRecycledEvent> {
+  private drawCards(
+    playerId: string,
+    count: number,
+    pile: CardDrawPile = "DECK"
+  ): Array<CardDrawnEvent | DeckRecycledEvent> {
     this.assertKnownPlayer(playerId);
     const events: Array<CardDrawnEvent | DeckRecycledEvent> = [];
 
     for (let drawIndex = 0; drawIndex < count; drawIndex += 1) {
-      if ((this.state.zones.deck[playerId]?.length ?? 0) === 0) {
+      if (pile === "DECK" && (this.state.zones.deck[playerId]?.length ?? 0) === 0) {
         events.push(...this.recycleTemporaryPileIntoDeck(playerId));
       }
 
-      const card = this.state.zones.deck[playerId]?.pop();
+      const card = this.drawCardFromPile(playerId, pile);
       if (!card) {
         break;
       }
@@ -566,6 +701,7 @@ export class GameStateStore {
         payload: {
           playerId,
           cardInstanceId: card.instanceId,
+          sourcePile: pile,
           privateCardData: {
             cardId: card.cardId
           }
@@ -574,6 +710,47 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  private drawCardFromPile(playerId: string, pile: CardDrawPile): CardInstance | undefined {
+    if (pile === "GRAVEYARD") {
+      return this.removeOwnedCardFromGlobalPile(this.state.zones.graveyard, playerId);
+    }
+
+    const zonePile = this.getPlayerDrawPile(playerId, pile);
+    const card = zonePile.pop();
+    if (card) {
+      return card;
+    }
+
+    return undefined;
+  }
+
+  private getPlayerDrawPile(playerId: string, pile: Exclude<CardDrawPile, "GRAVEYARD">): CardInstance[] {
+    switch (pile) {
+      case "DECK":
+        return this.state.zones.deck[playerId] ??= [];
+      case "TEMPORARY":
+        return this.state.zones.temporary[playerId] ??= [];
+      case "EXHAUST":
+        return this.state.zones.exhaust[playerId] ??= [];
+      case "NATURE":
+        return this.state.zones.nature[playerId] ??= [];
+      case "KNOWLEDGE":
+        return this.state.zones.knowledge[playerId] ??= [];
+      case "ENVIRONMENT":
+        return this.state.zones.environment[playerId] ??= [];
+    }
+  }
+
+  private removeOwnedCardFromGlobalPile(pile: CardInstance[], playerId: string): CardInstance | undefined {
+    for (let index = pile.length - 1; index >= 0; index -= 1) {
+      if (pile[index]?.ownerId === playerId) {
+        return pile.splice(index, 1)[0];
+      }
+    }
+
+    return undefined;
   }
 
   private recycleTemporaryPileIntoDeck(playerId: string): DeckRecycledEvent[] {
@@ -1039,6 +1216,20 @@ export class GameStateStore {
     }
   }
 
+  private assertSpecialCardCanResolve(
+    playerId: string,
+    card: CardInstance,
+    definition: CardDefinition
+  ): void {
+    if (definition.effect.type !== "REEQUIP_WEAPON") {
+      return;
+    }
+
+    if (!this.findDroppedWeaponForRecovery(playerId, card)) {
+      throw new CommandError("WEAPON_NOT_DROPPED", "No dropped weapon can be recovered by this card.");
+    }
+  }
+
   private payAdditionalCardCosts(
     playerId: string,
     sourceCard: CardInstance,
@@ -1213,9 +1404,13 @@ export class GameStateStore {
       playerId,
       targetIds,
       nextSeq: () => this.nextSeq(),
-      drawCards: (drawingPlayerId, count) => this.drawCards(drawingPlayerId, count),
+      drawCards: (drawingPlayerId, count, pile) => this.drawCards(drawingPlayerId, count, pile),
       addCardsToHand: (receivingPlayerId, cardId, count) =>
         this.addCardsToHand(receivingPlayerId, cardId, count, card.instanceId),
+      disarmRandomWeapon: (_sourcePlayerId, targetId, sourceCard) =>
+        this.disarmRandomWeapon(targetId, sourceCard),
+      reequipWeapon: (reequippingPlayerId, sourceCard) =>
+        this.reequipWeapon(reequippingPlayerId, sourceCard),
       beforeDamageHit: allowDamageReactions
         ? (targetId, amount) => this.resolveDamageReaction(playerId, card, targetId, amount)
         : undefined
@@ -1301,6 +1496,238 @@ export class GameStateStore {
     }
 
     return events;
+  }
+
+  private disarmRandomWeapon(targetId: string, sourceCard: CardInstance): GameEvent[] {
+    const target = this.state.players[targetId];
+    this.assertKnownPlayer(targetId);
+    const character = this.assertPlayerCharacter(target);
+    const equippedWeapons = Object.values(character.weaponSlots).filter(
+      (weapon) => weapon.status === "EQUIPPED"
+    );
+
+    if (equippedWeapons.length === 0) {
+      return [];
+    }
+
+    const weapon = equippedWeapons[Math.floor(Math.random() * equippedWeapons.length)];
+    weapon.status = "DROPPED";
+    const suppressed = this.moveWeaponCardsToUnavailable(targetId, weapon);
+    const recoveryCard = this.createWeaponRecoveryCard(targetId, weapon);
+    const events: GameEvent[] = [
+      {
+        type: "EQUIPMENT_DROPPED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId: targetId,
+          sourceId: weapon.weaponId,
+          bindingId: weapon.bindingId,
+          ...(recoveryCard ? { recoveryCardInstanceId: recoveryCard.instanceId } : {})
+        }
+      } satisfies EquipmentDroppedEvent
+    ];
+
+    events.push(...suppressed.events);
+
+    if (suppressed.cardCount > 0) {
+      events.push({
+        type: "LOADOUT_CARDS_SUPPRESSED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId: targetId,
+          sourceType: "WEAPON",
+          sourceId: weapon.weaponId,
+          bindingId: weapon.bindingId,
+          cardCount: suppressed.cardCount,
+          destinationZone: "UNAVAILABLE"
+        }
+      } satisfies LoadoutCardsSuppressedEvent);
+    }
+
+    if (recoveryCard) {
+      events.push({
+        type: "CARD_CREATED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId: targetId,
+          sourceId: sourceCard.instanceId,
+          cardInstanceId: recoveryCard.instanceId,
+          cardId: recoveryCard.cardId,
+          destinationZone: "TEMPORARY"
+        }
+      } satisfies CardCreatedEvent);
+    }
+
+    return events;
+  }
+
+  private reequipWeapon(playerId: string, sourceCard: CardInstance): GameEvent[] {
+    const weapon = this.findDroppedWeaponForRecovery(playerId, sourceCard);
+    if (!weapon) {
+      throw new CommandError("WEAPON_NOT_DROPPED", "No dropped weapon can be recovered by this card.");
+    }
+
+    weapon.status = "EQUIPPED";
+    const restoredCount = this.restoreWeaponCardsToDeck(playerId, weapon);
+
+    return [
+      {
+        type: "EQUIPMENT_REEQUIPPED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          sourceId: weapon.weaponId,
+          bindingId: weapon.bindingId
+        }
+      } satisfies EquipmentReequippedEvent,
+      {
+        type: "LOADOUT_CARDS_RESTORED",
+        seq: this.nextSeq(),
+        payload: {
+          playerId,
+          sourceType: "WEAPON",
+          sourceId: weapon.weaponId,
+          bindingId: weapon.bindingId,
+          cardCount: restoredCount,
+          destinationZone: "DECK"
+        }
+      } satisfies LoadoutCardsRestoredEvent
+    ];
+  }
+
+  private createWeaponRecoveryCard(
+    playerId: string,
+    weapon: WeaponSlotState
+  ): CardInstance | null {
+    const source = this.loadoutSources[loadoutSourceKey("WEAPON", weapon.weaponId)];
+    const recoveryCardId = source?.recoveryCardId;
+    if (!recoveryCardId) {
+      return null;
+    }
+
+    this.getCardDefinition(recoveryCardId);
+    const card = this.deckManager.createCard(
+      recoveryCardId,
+      playerId,
+      "TEMPORARY",
+      {
+        type: "RECOVERY",
+        sourceId: weapon.weaponId,
+        bindingId: weapon.bindingId
+      }
+    );
+    this.state.zones.temporary[playerId] ??= [];
+    this.state.zones.temporary[playerId].push(card);
+    return card;
+  }
+
+  private moveWeaponCardsToUnavailable(playerId: string, weapon: WeaponSlotState): MovedLoadoutCardsResult {
+    const unavailable = this.state.zones.unavailable[playerId] ??= [];
+    const result: MovedLoadoutCardsResult = {
+      cardCount: 0,
+      events: []
+    };
+
+    for (const zoneName of PLAYER_OWNED_ZONE_NAMES) {
+      const pile = this.getPlayerOwnedZone(zoneName, playerId);
+      const moved = this.moveMatchingCardsToUnavailable(playerId, pile, unavailable, weapon);
+      result.cardCount += moved.cardCount;
+      result.events.push(...moved.events);
+    }
+
+    for (const pile of [this.state.zones.board, this.state.zones.graveyard, this.state.zones.exile]) {
+      const moved = this.moveMatchingCardsToUnavailable(playerId, pile, unavailable, weapon);
+      result.cardCount += moved.cardCount;
+      result.events.push(...moved.events);
+    }
+
+    return result;
+  }
+
+  private moveMatchingCardsToUnavailable(
+    playerId: string,
+    pile: CardInstance[],
+    unavailable: CardInstance[],
+    weapon: WeaponSlotState
+  ): MovedLoadoutCardsResult {
+    const result: MovedLoadoutCardsResult = {
+      cardCount: 0,
+      events: []
+    };
+
+    for (let index = pile.length - 1; index >= 0; index -= 1) {
+      const card = pile[index];
+      if (!card || !this.isWeaponLoadoutCard(card, weapon)) {
+        continue;
+      }
+
+      pile.splice(index, 1);
+      result.events.push(...this.revertPendingCardTransformForLeavingHand(playerId, card));
+      delete card.preparedTargetIds;
+      card.zone = "UNAVAILABLE";
+      unavailable.push(card);
+      result.cardCount += 1;
+    }
+
+    return result;
+  }
+
+  private restoreWeaponCardsToDeck(playerId: string, weapon: WeaponSlotState): number {
+    const unavailable = this.state.zones.unavailable[playerId] ??= [];
+    const restoredCards: CardInstance[] = [];
+
+    for (let index = unavailable.length - 1; index >= 0; index -= 1) {
+      const card = unavailable[index];
+      if (!card || !this.isWeaponLoadoutCard(card, weapon)) {
+        continue;
+      }
+
+      unavailable.splice(index, 1);
+      delete card.preparedTargetIds;
+      card.zone = "DECK";
+      restoredCards.push(card);
+    }
+
+    if (restoredCards.length > 0) {
+      this.state.zones.deck[playerId] = this.deckManager.shuffle([
+        ...(this.state.zones.deck[playerId] ?? []),
+        ...restoredCards
+      ]);
+    }
+
+    return restoredCards.length;
+  }
+
+  private findDroppedWeaponForRecovery(
+    playerId: string,
+    sourceCard: CardInstance
+  ): WeaponSlotState | null {
+    const player = this.state.players[playerId];
+    const character = this.assertPlayerCharacter(player);
+    const droppedWeapons = Object.values(character.weaponSlots).filter(
+      (weapon) => weapon.status === "DROPPED"
+    );
+
+    if (sourceCard.origin?.type === "RECOVERY") {
+      return droppedWeapons.find((weapon) => weapon.bindingId === sourceCard.origin?.bindingId) ?? null;
+    }
+
+    return droppedWeapons.find((weapon) => {
+      const source = this.loadoutSources[loadoutSourceKey("WEAPON", weapon.weaponId)];
+      return source?.recoveryCardId === sourceCard.cardId;
+    }) ?? null;
+  }
+
+  private isWeaponLoadoutCard(card: CardInstance, weapon: WeaponSlotState): boolean {
+    return (
+      card.origin?.type === "WEAPON" &&
+      card.origin.sourceId === weapon.weaponId &&
+      card.origin.bindingId === weapon.bindingId
+    );
+  }
+
+  private getPlayerOwnedZone(zoneName: PlayerOwnedZoneName, playerId: string): CardInstance[] {
+    return this.state.zones[zoneName][playerId] ??= [];
   }
 
   private moveCardToPrepared(card: CardInstance): CardZone {
@@ -1560,6 +1987,31 @@ export class GameStateStore {
     }
   }
 
+  private assertKnownLoadout(character: CharacterState): void {
+    if (character.classId) {
+      this.assertKnownLoadoutSource("CLASS", character.classId);
+    }
+
+    for (const featId of character.featIds) {
+      this.assertKnownLoadoutSource("FEAT", featId);
+    }
+
+    for (const adventureSkillId of character.adventureSkillIds) {
+      this.assertKnownLoadoutSource("ADVENTURE_SKILL", adventureSkillId);
+    }
+
+    for (const weaponId of Object.values(character.weaponIds)) {
+      this.assertKnownLoadoutSource("WEAPON", weaponId);
+    }
+  }
+
+  private assertKnownLoadoutSource(sourceType: LoadoutSourceType, sourceId: string): void {
+    const key = loadoutSourceKey(sourceType, sourceId);
+    if (!this.loadoutSources[key]) {
+      throw new CommandError("UNKNOWN_LOADOUT_SOURCE", `Loadout source ${key} does not exist.`);
+    }
+  }
+
   private findCardInHand(playerId: string, cardInstanceId: string): { card: CardInstance; index: number } {
     const hand = this.state.zones.hand[playerId] ?? [];
     const index = hand.findIndex((candidate) => candidate.instanceId === cardInstanceId);
@@ -1636,7 +2088,8 @@ export class GameStateStore {
       definition.effect.type === "HEAL" ||
       definition.effect.type === "LOSE_HP" ||
       definition.effect.type === "LOSE_ENERGY" ||
-      definition.effect.type === "ADD_CARD_TO_HAND"
+      definition.effect.type === "ADD_CARD_TO_HAND" ||
+      definition.effect.type === "DISARM_RANDOM_WEAPON"
     );
   }
 

@@ -17,8 +17,11 @@ export type Env = {
   CARD_CATALOG_KEY?: string;
   CARD_CARDS_CSV_URL?: string;
   CARD_STARTER_DECK_CSV_URL?: string;
+  CARD_HIDDEN_DECKS_CSV_URL?: string;
   CARD_TRANSFORM_RULES_CSV_URL?: string;
   CARD_RACES_CSV_URL?: string;
+  CARD_LOADOUT_SOURCES_CSV_URL?: string;
+  CARD_LOADOUT_CARDS_CSV_URL?: string;
   CARD_CATALOG_ADMIN_TOKEN?: string;
 };
 
@@ -56,8 +59,11 @@ export default {
           version: catalog.version,
           cardCount: Object.keys(catalog.cardDefinitions).length,
           starterDeckSize: catalog.starterDeckCardIds.length,
+          hiddenDeckSizes: hiddenDeckSizes(catalog.hiddenDeckCardIds),
           transformRuleCount: catalog.transformRules.length,
-          raceCount: Object.keys(catalog.races ?? {}).length
+          raceCount: Object.keys(catalog.races ?? {}).length,
+          loadoutSourceCount: Object.keys(catalog.loadoutSources ?? {}).length,
+          loadoutCardRuleCount: catalog.loadoutCards?.length ?? 0
         });
       } catch (error) {
         return json({ error: error instanceof Error ? error.message : "Unable to sync card catalog." }, 500);
@@ -552,10 +558,23 @@ function cardCatalogResponse(result: WorkerCardCatalogResult): Record<string, un
     version: result.catalog.version,
     cardCount: Object.keys(result.catalog.cardDefinitions).length,
     starterDeckSize: result.catalog.starterDeckCardIds.length,
+    hiddenDeckSizes: hiddenDeckSizes(result.catalog.hiddenDeckCardIds),
     transformRuleCount: result.catalog.transformRules.length,
     raceCount: Object.keys(result.catalog.races ?? {}).length,
+    loadoutSourceCount: Object.keys(result.catalog.loadoutSources ?? {}).length,
+    loadoutCardRuleCount: result.catalog.loadoutCards?.length ?? 0,
     races: result.catalog.races,
+    loadoutSources: result.catalog.loadoutSources,
+    loadoutCards: result.catalog.loadoutCards,
     cardDefinitions: result.catalog.cardDefinitions
+  };
+}
+
+function hiddenDeckSizes(hiddenDeckCardIds: WorkerCardCatalogResult["catalog"]["hiddenDeckCardIds"]): Record<string, number> {
+  return {
+    NATURE: hiddenDeckCardIds?.NATURE.length ?? 0,
+    KNOWLEDGE: hiddenDeckCardIds?.KNOWLEDGE.length ?? 0,
+    ENVIRONMENT: hiddenDeckCardIds?.ENVIRONMENT.length ?? 0
   };
 }
 

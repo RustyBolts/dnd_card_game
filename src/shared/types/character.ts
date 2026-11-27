@@ -1,3 +1,5 @@
+import type { WeaponSlotState } from "./loadout.js";
+
 export const ABILITY_KEYS = [
   "strength",
   "dexterity",
@@ -28,6 +30,10 @@ export type RaceDefinition = {
 export type CharacterConfig = {
   raceId: string;
   abilityScores: AbilityScores;
+  classId?: string;
+  featIds?: string[];
+  weaponIds?: Record<string, string>;
+  adventureSkillIds?: string[];
 };
 
 export type CharacterState = CharacterConfig & {
@@ -36,4 +42,8 @@ export type CharacterState = CharacterConfig & {
   maxHp: number;
   naturalArmorType: NaturalArmorType;
   naturalArmorValue: number;
+  featIds: string[];
+  weaponIds: Record<string, string>;
+  adventureSkillIds: string[];
+  weaponSlots: Record<string, WeaponSlotState>;
 };

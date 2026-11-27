@@ -56,6 +56,143 @@ describe("card catalog data source", () => {
     expect(catalog.races?.human.baseHp).toBe(20);
   });
 
+  it("parses loadout sources and cards from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        CARDS_CSV +
+        "disarm,繳械,1,ATTACK,使目標武器脫手。,DISARM_RANDOM_WEAPON,,,SINGLE,ENEMY,true,true\n" +
+        "slash,揮砍,1,ATTACK,造成 2 點傷害。,DAMAGE,2,,SINGLE,ENEMY,true,true\n" +
+        "longsword,長劍,0,ITEM,重新裝備長劍。,REEQUIP_WEAPON,,,NONE,SELF,false,true\n",
+      starterDeckCsv: STARTER_DECK_CSV,
+      loadoutSourcesCsv:
+        "sourceType,sourceId,name,recoveryCardId,enabled\n" +
+        "CLASS,fighter,戰士,,true\n" +
+        "WEAPON,longsword,長劍,longsword,true\n",
+      loadoutCardsCsv:
+        "sourceType,sourceId,cardId,count,enabled\n" +
+        "CLASS,fighter,disarm,2,true\n" +
+        "WEAPON,longsword,slash,3,true\n",
+      version: "loadout-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "loadout-json",
+      cardDefinitions: {
+        slash: {
+          cardId: "slash",
+          name: "揮砍",
+          cost: 1,
+          type: "ATTACK",
+          description: "造成 2 點傷害。",
+          effect: { type: "DAMAGE", value: 2 },
+          targeting: { selection: "SINGLE", scope: "ENEMY", requiresTarget: true }
+        },
+        longsword: {
+          cardId: "longsword",
+          name: "長劍",
+          cost: 0,
+          type: "ITEM",
+          description: "重新裝備長劍。",
+          effect: { type: "REEQUIP_WEAPON" },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["slash"],
+      loadoutSources: {
+        "WEAPON:longsword": {
+          name: "長劍",
+          recoveryCardId: "longsword"
+        }
+      },
+      loadoutCards: [
+        {
+          sourceType: "WEAPON",
+          sourceId: "longsword",
+          cardId: "slash",
+          count: 3
+        }
+      ]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.disarm.effect).toEqual({ type: "DISARM_RANDOM_WEAPON" });
+    expect(csvCatalog.cardDefinitions.longsword.effect).toEqual({ type: "REEQUIP_WEAPON" });
+    expect(csvCatalog.loadoutSources?.["WEAPON:longsword"]?.recoveryCardId).toBe("longsword");
+    expect(csvCatalog.loadoutCards).toContainEqual({
+      sourceType: "WEAPON",
+      sourceId: "longsword",
+      cardId: "slash",
+      count: 3
+    });
+    expect(jsonCatalog.loadoutSources?.["WEAPON:longsword"]).toEqual({
+      sourceType: "WEAPON",
+      sourceId: "longsword",
+      name: "長劍",
+      recoveryCardId: "longsword"
+    });
+    expect(jsonCatalog.loadoutCards).toEqual([
+      {
+        sourceType: "WEAPON",
+        sourceId: "longsword",
+        cardId: "slash",
+        count: 3
+      }
+    ]);
+  });
+
+  describe.each(["CSV", "JSON"] as const)("%s recovery card validation", (format) => {
+    function parseSource(sourceType: string, recoveryCardId?: string) {
+      const input = {
+        cardsCsv:
+          CARDS_CSV +
+          "disarm,繳械,1,ATTACK,使目標武器脫手。,DISARM_RANDOM_WEAPON,,,SINGLE,ENEMY,true,true\n" +
+          "no_effect,無效果,0,ITEM,沒有直接效果。,NONE,,,NONE,SELF,false,true\n" +
+          "longsword,長劍,0,ITEM,重新裝備長劍。,REEQUIP_WEAPON,,,NONE,SELF,false,true\n",
+        starterDeckCsv: STARTER_DECK_CSV,
+        version: "recovery-validation"
+      };
+
+      if (format === "CSV") {
+        return parseCardCatalogFromCsv({
+          ...input,
+          loadoutSourcesCsv:
+            "sourceType,sourceId,name,recoveryCardId,enabled\n" +
+            `${sourceType},longsword,長劍,${recoveryCardId ?? ""},true\n`
+        });
+      }
+
+      return parseCardCatalogJson({
+        ...parseCardCatalogFromCsv(input),
+        loadoutSources: [{ sourceType, sourceId: "longsword", name: "長劍", recoveryCardId }]
+      }, "catalog.json");
+    }
+
+    it.each(["fireball", "no_effect", "disarm"])("rejects non-recovery card %s", (cardId) => {
+      expect(() => parseSource("WEAPON", cardId)).toThrow(
+        `recoveryCardId "${cardId}" must reference a card with effect type REEQUIP_WEAPON.`
+      );
+    });
+
+    it("still rejects unknown recovery card IDs", () => {
+      expect(() => parseSource("WEAPON", "missing_card")).toThrow(
+        'recoveryCardId references unknown cardId "missing_card".'
+      );
+    });
+
+    it("still rejects recovery cards on non-weapon sources", () => {
+      expect(() => parseSource("CLASS", "longsword")).toThrow(
+        "recoveryCardId is only supported for WEAPON sources."
+      );
+    });
+
+    it("keeps recoveryCardId optional for weapon sources", () => {
+      const catalog = parseSource("WEAPON");
+      expect(catalog.loadoutSources?.["WEAPON:longsword"]).toEqual({
+        sourceType: "WEAPON",
+        sourceId: "longsword",
+        name: "長劍"
+      });
+    });
+  });
+
   it("parses optional consumable card flags from CSV and JSON catalogs", () => {
     const csvCatalog = parseCardCatalogFromCsv({
       cardsCsv:
@@ -270,6 +407,42 @@ describe("card catalog data source", () => {
     }, "catalog.json")).toThrow(/effect\.cardId references unknown cardId "missing"/);
   });
 
+  it("parses draw-from-pile effects from CSV and JSON catalogs", () => {
+    const csvCatalog = parseCardCatalogFromCsv({
+      cardsCsv:
+        "cardId,name,cost,type,description,effectType,effectValue,effectCount,targetSelection,targetScope,targetRequired,enabled\n" +
+        "verdant_call,自然呼喚,0,SKILL,從自然牌庫抽 2 張。,從牌堆抽牌,自然,2,NONE,SELF,false,true\n",
+      starterDeckCsv: "cardId,count\nverdant_call,1\n",
+      version: "draw-from-pile-csv"
+    });
+    const jsonCatalog = parseCardCatalogJson({
+      version: "draw-from-pile-json",
+      cardDefinitions: {
+        scavenge: {
+          cardId: "scavenge",
+          name: "Scavenge",
+          cost: 0,
+          type: "SKILL",
+          description: "Draw from discard.",
+          effect: { type: "DRAW_FROM_PILE", pile: "棄牌堆", count: 1 },
+          targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+        }
+      },
+      starterDeckCardIds: ["scavenge"]
+    }, "catalog.json");
+
+    expect(csvCatalog.cardDefinitions.verdant_call.effect).toEqual({
+      type: "DRAW_FROM_PILE",
+      pile: "NATURE",
+      count: 2
+    });
+    expect(jsonCatalog.cardDefinitions.scavenge.effect).toEqual({
+      type: "DRAW_FROM_PILE",
+      pile: "GRAVEYARD",
+      count: 1
+    });
+  });
+
   it("parses and validates end-turn status action tags", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv:
@@ -405,10 +578,39 @@ describe("card catalog data source", () => {
     const catalog = parseCardCatalogFromCsv({
       cardsCsv: CARDS_CSV,
       starterDeckCsv: STARTER_DECK_CSV,
+      hiddenDecksCsv:
+        "pile,cardId,count,enabled\n" +
+        "知識,tactical_insight,2,true\n" +
+        "ENVIRONMENT,mana_spark,1,true\n",
       version: "kv-test"
     });
 
+    expect(catalog.hiddenDeckCardIds).toEqual({
+      NATURE: [],
+      KNOWLEDGE: ["tactical_insight", "tactical_insight"],
+      ENVIRONMENT: ["mana_spark"]
+    });
     expect(parseCardCatalogJson(JSON.parse(JSON.stringify(catalog)), "test-kv")).toEqual(catalog);
+  });
+
+  it("rejects hidden deck rows that reference unknown cards or non-hidden piles", () => {
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv: CARDS_CSV,
+        starterDeckCsv: STARTER_DECK_CSV,
+        hiddenDecksCsv: "pile,cardId,count,enabled\nKNOWLEDGE,missing,1,true\n",
+        version: "bad-hidden-card"
+      })
+    ).toThrow(/unknown cardId "missing"/);
+
+    expect(() =>
+      parseCardCatalogFromCsv({
+        cardsCsv: CARDS_CSV,
+        starterDeckCsv: STARTER_DECK_CSV,
+        hiddenDecksCsv: "pile,cardId,count,enabled\nDECK,tactical_insight,1,true\n",
+        version: "bad-hidden-pile"
+      })
+    ).toThrow(/pile must be NATURE, KNOWLEDGE, or ENVIRONMENT/);
   });
 
   it("rejects starter deck rows that reference unknown cards", () => {
@@ -714,7 +916,7 @@ describe("card catalog data source", () => {
         starterDeckCsv: "cardId,count\nstance_shift,1\n",
         version: "old-transform-effect"
       })
-    ).toThrow(/effectType must be NONE, DAMAGE, HEAL, DRAW, LOSE_HP, LOSE_ENERGY, or ADD_CARD_TO_HAND/);
+    ).toThrow(/effectType must be .*DRAW_FROM_PILE.*ADD_CARD_TO_HAND/);
   });
 
   it("normalizes Google Sheets published HTML URLs to CSV URLs", () => {

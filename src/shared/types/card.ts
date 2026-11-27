@@ -1,3 +1,5 @@
+import type { CardOrigin } from "./loadout.js";
+
 export type CardType = "ATTACK" | "SKILL" | "MAGE" | "ITEM" | "STATUS";
 
 export type CardZone =
@@ -8,17 +10,35 @@ export type CardZone =
   | "RESOLVING"
   | "TEMPORARY"
   | "EXHAUST"
+  | "NATURE"
+  | "KNOWLEDGE"
+  | "ENVIRONMENT"
   | "GRAVEYARD"
-  | "EXILE";
+  | "EXILE"
+  | "UNAVAILABLE";
+
+export type CardDrawPile =
+  | "DECK"
+  | "TEMPORARY"
+  | "EXHAUST"
+  | "GRAVEYARD"
+  | "NATURE"
+  | "KNOWLEDGE"
+  | "ENVIRONMENT";
+
+export type HiddenDeckPile = "NATURE" | "KNOWLEDGE" | "ENVIRONMENT";
 
 export type CardEffectDefinition =
   | { type: "NONE" }
   | { type: "DAMAGE"; value: number; count?: number }
   | { type: "HEAL"; value: number }
   | { type: "DRAW"; count: number }
+  | { type: "DRAW_FROM_PILE"; pile: CardDrawPile; count: number }
   | { type: "LOSE_HP"; value: number }
   | { type: "LOSE_ENERGY"; value: number }
-  | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number };
+  | { type: "ADD_CARD_TO_HAND"; cardId: string; count: number }
+  | { type: "DISARM_RANDOM_WEAPON" }
+  | { type: "REEQUIP_WEAPON" };
 
 export type CardTargetSelection = "NONE" | "SINGLE" | "GROUP";
 
@@ -74,6 +94,7 @@ export type CardInstance = {
   cardId: string;
   ownerId: string;
   zone: CardZone;
+  origin?: CardOrigin;
   preparedTargetIds?: string[];
 };
 

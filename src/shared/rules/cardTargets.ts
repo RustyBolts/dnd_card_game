@@ -19,6 +19,14 @@ export function defaultTargetingForEffect(effect: CardEffectDefinition): CardTar
     };
   }
 
+  if (effect.type === "DISARM_RANDOM_WEAPON") {
+    return {
+      selection: "SINGLE",
+      scope: "ENEMY",
+      requiresTarget: true
+    };
+  }
+
   return {
     selection: "NONE",
     scope: "SELF",

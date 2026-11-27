@@ -69,8 +69,11 @@ KV binding: CARD_CATALOG_KV
 Variables:
   CARD_CARDS_CSV_URL=<published cards CSV URL>
   CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_HIDDEN_DECKS_CSV_URL=<published hidden_decks CSV URL>
   CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
   CARD_RACES_CSV_URL=<published races CSV URL>
+  CARD_LOADOUT_SOURCES_CSV_URL=<published loadout_sources CSV URL>
+  CARD_LOADOUT_CARDS_CSV_URL=<published loadout_cards CSV URL>
   CARD_CATALOG_KEY=card-catalog:active
 Secret:
   CARD_CATALOG_ADMIN_TOKEN

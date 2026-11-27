@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseCardCatalogFromCsv } from "../src/shared/data/cardCatalog.js";
-import type { CardInstance } from "../src/shared/types/card.js";
+import { GameStateStore } from "../src/host/GameStateStore.js";
+import { DEFAULT_CARD_CATALOG } from "../src/shared/rules/cardDefinitions.js";
+import { createDefaultCharacterConfig } from "../src/shared/rules/characterRules.js";
+import type { CardDrawPile, CardInstance } from "../src/shared/types/card.js";
 import type { CardCatalog } from "../src/shared/types/cardCatalog.js";
+import type { GameState } from "../src/shared/types/game.js";
 import type { CardResolvedEvent, GameEvent } from "../src/shared/types/network.js";
 import { createStartedGame, createStartedGameWithPlayers } from "./testUtils.js";
 
@@ -133,6 +137,70 @@ describe("card effects", () => {
     expect(card.zone).toBe("EXHAUST");
     expect(state.zones.exhaust[playerId]).toContain(card);
     expect(state.zones.temporary[playerId]).not.toContain(card);
+  });
+
+  it("moves weapon-origin cards to unavailable on disarm and restores them when the recovery weapon card is played", () => {
+    const store = new GameStateStore("loadout_room", DEFAULT_CARD_CATALOG);
+    const attacker = store.addPlayer("Alice", "session_alice").player;
+    const defender = store.addPlayer("Bob", "session_bob").player;
+
+    store.setPlayerCharacter(attacker.playerId, {
+      ...createDefaultCharacterConfig(),
+      classId: "fighter"
+    });
+    store.setPlayerCharacter(defender.playerId, {
+      ...createDefaultCharacterConfig(),
+      weaponIds: {
+        MAIN_HAND: "longsword"
+      }
+    });
+    store.markPlayerReady(attacker.playerId);
+    store.markPlayerReady(defender.playerId);
+
+    const state = store.getState();
+    const weaponBindingId = state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.bindingId;
+    const disarmCard: CardInstance = {
+      instanceId: "test_disarm",
+      cardId: "disarm",
+      ownerId: attacker.playerId,
+      zone: "HAND"
+    };
+    state.players[attacker.playerId].energy = 1;
+    state.zones.hand[attacker.playerId].push(disarmCard);
+
+    const disarmEvents = store.playCard(attacker.playerId, disarmCard.instanceId, defender.playerId);
+    const recoveryCard = state.zones.temporary[defender.playerId].find(
+      (card) => card.cardId === "longsword" && card.origin?.type === "RECOVERY"
+    );
+
+    expect(disarmEvents.map((event) => event.type)).toContain("EQUIPMENT_DROPPED");
+    expect(disarmEvents.map((event) => event.type)).toContain("LOADOUT_CARDS_SUPPRESSED");
+    expect(disarmEvents.map((event) => event.type)).toContain("CARD_CREATED");
+    expect(state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.status).toBe("DROPPED");
+    expect(recoveryCard?.origin).toEqual({
+      type: "RECOVERY",
+      sourceId: "longsword",
+      bindingId: weaponBindingId
+    });
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "unavailable")).toHaveLength(5);
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "available")).toHaveLength(0);
+
+    state.currentPlayerId = defender.playerId;
+    state.players[defender.playerId].energy = 0;
+    state.zones.temporary[defender.playerId] = state.zones.temporary[defender.playerId].filter(
+      (card) => card !== recoveryCard
+    );
+    recoveryCard!.zone = "HAND";
+    state.zones.hand[defender.playerId].push(recoveryCard!);
+
+    const reequipEvents = store.playCard(defender.playerId, recoveryCard!.instanceId);
+
+    expect(reequipEvents.map((event) => event.type)).toContain("EQUIPMENT_REEQUIPPED");
+    expect(reequipEvents.map((event) => event.type)).toContain("LOADOUT_CARDS_RESTORED");
+    expect(state.players[defender.playerId].character!.weaponSlots.MAIN_HAND.status).toBe("EQUIPPED");
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "unavailable")).toHaveLength(0);
+    expect(cardsWithWeaponBinding(state, defender.playerId, weaponBindingId, "deck")).toHaveLength(5);
+    expect(state.zones.exhaust[defender.playerId]).toContain(recoveryCard);
   });
 
   it("rejects enemy single-target damage cards without an explicit target", () => {
@@ -312,6 +380,123 @@ describe("card effects", () => {
 
     expect(events.filter((event) => event.type === "CARD_DRAWN")).toHaveLength(2);
     expect(state.zones.hand[playerId].length).toBe(handBefore + 2);
+  });
+
+  it("draws cards from the specified hidden nature deck without exposing it to preview", () => {
+    const store = createStartedGame(createDrawFromPileCatalog("NATURE", 2));
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard = createCard("test_nature_call", "draw_from_pile", playerId);
+    const bottomNatureCard = createCard("nature_bottom", "seedling", playerId, "NATURE");
+    const topNatureCard = createCard("nature_top", "seedling", playerId, "NATURE");
+    const deckBefore = [...state.zones.deck[playerId]];
+
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.nature[playerId] = [bottomNatureCard, topNatureCard];
+
+    const events = store.playCard(playerId, sourceCard.instanceId);
+    const drawEvents = events.filter((event) => event.type === "CARD_DRAWN");
+    const snapshot = store.createSnapshotEvent(playerId).payload.state;
+
+    expect(drawEvents.map((event) => event.payload)).toEqual([
+      {
+        playerId,
+        cardInstanceId: topNatureCard.instanceId,
+        sourcePile: "NATURE",
+        privateCardData: { cardId: "seedling" }
+      },
+      {
+        playerId,
+        cardInstanceId: bottomNatureCard.instanceId,
+        sourcePile: "NATURE",
+        privateCardData: { cardId: "seedling" }
+      }
+    ]);
+    expect(state.zones.deck[playerId]).toEqual(deckBefore);
+    expect(state.zones.nature[playerId]).toEqual([]);
+    expect(state.zones.hand[playerId]).toEqual([topNatureCard, bottomNatureCard]);
+    expect(snapshot.zones.natureCounts[playerId]).toBe(0);
+    expect(snapshot.zones.nature[playerId]).toEqual([]);
+    expect(snapshot.zones.drawPreview[playerId].some((card) =>
+      card.instanceId === topNatureCard.instanceId || card.instanceId === bottomNatureCard.instanceId
+    )).toBe(false);
+  });
+
+  it("initializes hidden knowledge deck cards from the catalog before draw-from-pile effects resolve", () => {
+    const catalog = createDrawFromPileCatalog("KNOWLEDGE", 1);
+    catalog.hiddenDeckCardIds = {
+      NATURE: [],
+      KNOWLEDGE: ["seedling", "seedling"],
+      ENVIRONMENT: []
+    };
+    const store = createStartedGame(catalog);
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard = createCard("test_knowledge_call", "draw_from_pile", playerId);
+
+    expect(state.zones.knowledge[playerId]).toHaveLength(2);
+    state.zones.hand[playerId] = [sourceCard];
+
+    const events = store.playCard(playerId, sourceCard.instanceId);
+    const drawEvent = events.find((event) => event.type === "CARD_DRAWN");
+
+    expect(drawEvent?.payload).toMatchObject({
+      playerId,
+      sourcePile: "KNOWLEDGE",
+      privateCardData: { cardId: "seedling" }
+    });
+    expect(state.zones.hand[playerId]).toHaveLength(1);
+    expect(state.zones.hand[playerId][0]?.cardId).toBe("seedling");
+    expect(state.zones.knowledge[playerId]).toHaveLength(1);
+  });
+
+  it("draws from the temporary pile without including the resolving source card", () => {
+    const store = createStartedGame(createDrawFromPileCatalog("TEMPORARY", 1));
+    const state = store.getState();
+    const playerId = "p1";
+    const sourceCard = createCard("test_scavenge", "draw_from_pile", playerId);
+    const temporaryCard = createCard("temporary_top", "seedling", playerId, "TEMPORARY");
+
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.temporary[playerId] = [temporaryCard];
+
+    const events = store.playCard(playerId, sourceCard.instanceId);
+    const drawEvent = events.find((event) => event.type === "CARD_DRAWN");
+
+    expect(drawEvent?.payload).toEqual({
+      playerId,
+      cardInstanceId: temporaryCard.instanceId,
+      sourcePile: "TEMPORARY",
+      privateCardData: { cardId: "seedling" }
+    });
+    expect(state.zones.hand[playerId]).toEqual([temporaryCard]);
+    expect(state.zones.temporary[playerId]).toEqual([sourceCard]);
+    expect(sourceCard.zone).toBe("TEMPORARY");
+  });
+
+  it("draws only the acting player's cards from the graveyard pile", () => {
+    const store = createStartedGame(createDrawFromPileCatalog("GRAVEYARD", 1));
+    const state = store.getState();
+    const playerId = "p1";
+    const opponentId = "p2";
+    const sourceCard = createCard("test_grave_call", "draw_from_pile", playerId);
+    const opponentGraveCard = createCard("opponent_grave", "seedling", opponentId, "GRAVEYARD");
+    const ownGraveCard = createCard("own_grave", "seedling", playerId, "GRAVEYARD");
+
+    state.zones.hand[playerId] = [sourceCard];
+    state.zones.graveyard = [opponentGraveCard, ownGraveCard];
+
+    const events = store.playCard(playerId, sourceCard.instanceId);
+    const drawEvent = events.find((event) => event.type === "CARD_DRAWN");
+
+    expect(drawEvent?.payload).toEqual({
+      playerId,
+      cardInstanceId: ownGraveCard.instanceId,
+      sourcePile: "GRAVEYARD",
+      privateCardData: { cardId: "seedling" }
+    });
+    expect(state.zones.hand[playerId]).toEqual([ownGraveCard]);
+    expect(state.zones.graveyard).toEqual([opponentGraveCard]);
   });
 
   it("keeps a played draw card out of the recycled temporary pile until it resolves", () => {
@@ -1664,6 +1849,34 @@ function findResolvedEvent(events: GameEvent[], cardInstanceId: string): CardRes
   );
 }
 
+function cardsWithWeaponBinding(
+  state: GameState,
+  playerId: string,
+  bindingId: string,
+  scope: "available" | "unavailable" | "deck"
+): CardInstance[] {
+  const matches = (card: CardInstance) =>
+    card.origin?.type === "WEAPON" &&
+    card.origin.sourceId === "longsword" &&
+    card.origin.bindingId === bindingId;
+
+  if (scope === "unavailable") {
+    return (state.zones.unavailable[playerId] ?? []).filter(matches);
+  }
+
+  if (scope === "deck") {
+    return (state.zones.deck[playerId] ?? []).filter(matches);
+  }
+
+  return [
+    ...(state.zones.deck[playerId] ?? []),
+    ...(state.zones.hand[playerId] ?? []),
+    ...(state.zones.prepared[playerId] ?? []),
+    ...(state.zones.temporary[playerId] ?? []),
+    ...(state.zones.exhaust[playerId] ?? [])
+  ].filter(matches);
+}
+
 function createExternalHealingCatalog(): CardCatalog {
   return parseCardCatalogFromCsv({
     cardsCsv:
@@ -1748,6 +1961,48 @@ function createAutomaticBonusActionCatalog(): CardCatalog {
       }
     },
     starterDeckCardIds: ["shockwave"],
+    transformRules: []
+  };
+}
+
+function createCard(
+  instanceId: string,
+  cardId: string,
+  ownerId: string,
+  zone: CardInstance["zone"] = "HAND"
+): CardInstance {
+  return {
+    instanceId,
+    cardId,
+    ownerId,
+    zone
+  };
+}
+
+function createDrawFromPileCatalog(pile: CardDrawPile, count: number): CardCatalog {
+  return {
+    version: `draw-from-${pile.toLowerCase()}-test`,
+    cardDefinitions: {
+      draw_from_pile: {
+        cardId: "draw_from_pile",
+        name: "Draw From Pile",
+        cost: 0,
+        type: "SKILL",
+        description: "Draw from a specified pile.",
+        effect: { type: "DRAW_FROM_PILE", pile, count },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      },
+      seedling: {
+        cardId: "seedling",
+        name: "Seedling",
+        cost: 0,
+        type: "SKILL",
+        description: "No effect.",
+        effect: { type: "NONE" },
+        targeting: { selection: "NONE", scope: "SELF", requiresTarget: false }
+      }
+    },
+    starterDeckCardIds: ["draw_from_pile", "seedling", "seedling"],
     transformRules: []
   };
 }

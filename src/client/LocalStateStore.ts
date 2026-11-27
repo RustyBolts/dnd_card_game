@@ -1,6 +1,7 @@
 import type { CardDefinition } from "../shared/types/card.js";
 import type { RaceDefinition } from "../shared/types/character.js";
 import type { VisibleGameState } from "../shared/types/game.js";
+import type { LoadoutCardDefinition, LoadoutSourceDefinition } from "../shared/types/loadout.js";
 import type { GameEvent } from "../shared/types/network.js";
 
 export class LocalStateStore {
@@ -9,6 +10,8 @@ export class LocalStateStore {
   state: VisibleGameState | null = null;
   cardDefinitions: Record<string, CardDefinition> = {};
   races: Record<string, RaceDefinition> = {};
+  loadoutSources: Record<string, LoadoutSourceDefinition> = {};
+  loadoutCards: LoadoutCardDefinition[] = [];
   cardCatalogVersion: string | null = null;
   readonly eventLog: GameEvent[] = [];
 
@@ -25,6 +28,8 @@ export class LocalStateStore {
       this.state = event.payload.state;
       this.cardDefinitions = event.payload.cardDefinitions;
       this.races = event.payload.races;
+      this.loadoutSources = event.payload.loadoutSources;
+      this.loadoutCards = event.payload.loadoutCards;
       this.cardCatalogVersion = event.payload.cardCatalogVersion;
     }
   }

@@ -10,7 +10,8 @@ export function redactPrivateEvent(event: GameEvent, recipientPlayerId: string):
       ...event,
       payload: {
         playerId: event.payload.playerId,
-        cardInstanceId: event.payload.cardInstanceId
+        cardInstanceId: event.payload.cardInstanceId,
+        ...(event.payload.sourcePile ? { sourcePile: event.payload.sourcePile } : {})
       }
     };
   }
@@ -45,6 +46,13 @@ export function redactPrivateEvent(event: GameEvent, recipientPlayerId: string):
   }
 
   if (event.type === "DISCARD_PHASE_STARTED") {
+    return event.payload.playerId === recipientPlayerId ? event : null;
+  }
+
+  if (
+    event.type === "LOADOUT_CARDS_SUPPRESSED" ||
+    event.type === "LOADOUT_CARDS_RESTORED"
+  ) {
     return event.payload.playerId === recipientPlayerId ? event : null;
   }
 

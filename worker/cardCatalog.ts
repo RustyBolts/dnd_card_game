@@ -11,8 +11,11 @@ export type CardCatalogEnv = {
   CARD_CATALOG_KEY?: string;
   CARD_CARDS_CSV_URL?: string;
   CARD_STARTER_DECK_CSV_URL?: string;
+  CARD_HIDDEN_DECKS_CSV_URL?: string;
   CARD_TRANSFORM_RULES_CSV_URL?: string;
   CARD_RACES_CSV_URL?: string;
+  CARD_LOADOUT_SOURCES_CSV_URL?: string;
+  CARD_LOADOUT_CARDS_CSV_URL?: string;
 };
 
 export type WorkerCardCatalogResult = {
@@ -55,21 +58,41 @@ export async function syncWorkerCardCatalog(env: CardCatalogEnv): Promise<CardCa
     throw new Error("CARD_CARDS_CSV_URL and CARD_STARTER_DECK_CSV_URL must both be configured.");
   }
 
-  const [cardsCsv, starterDeckCsv, transformRulesCsv, racesCsv] = await Promise.all([
+  const [
+    cardsCsv,
+    starterDeckCsv,
+    hiddenDecksCsv,
+    transformRulesCsv,
+    racesCsv,
+    loadoutSourcesCsv,
+    loadoutCardsCsv
+  ] = await Promise.all([
     fetchText(env.CARD_CARDS_CSV_URL, "cards CSV"),
     fetchText(env.CARD_STARTER_DECK_CSV_URL, "starter deck CSV"),
+    env.CARD_HIDDEN_DECKS_CSV_URL
+      ? fetchText(env.CARD_HIDDEN_DECKS_CSV_URL, "hidden decks CSV")
+      : Promise.resolve(undefined),
     env.CARD_TRANSFORM_RULES_CSV_URL
       ? fetchText(env.CARD_TRANSFORM_RULES_CSV_URL, "transform rules CSV")
       : Promise.resolve(undefined),
     env.CARD_RACES_CSV_URL
       ? fetchText(env.CARD_RACES_CSV_URL, "races CSV")
+      : Promise.resolve(undefined),
+    env.CARD_LOADOUT_SOURCES_CSV_URL
+      ? fetchText(env.CARD_LOADOUT_SOURCES_CSV_URL, "loadout sources CSV")
+      : Promise.resolve(undefined),
+    env.CARD_LOADOUT_CARDS_CSV_URL
+      ? fetchText(env.CARD_LOADOUT_CARDS_CSV_URL, "loadout cards CSV")
       : Promise.resolve(undefined)
   ]);
   const catalog = parseCardCatalogFromCsv({
     cardsCsv,
     starterDeckCsv,
+    hiddenDecksCsv,
     transformRulesCsv,
     racesCsv,
+    loadoutSourcesCsv,
+    loadoutCardsCsv,
     version: `google-sheets:${new Date().toISOString()}`
   });
 

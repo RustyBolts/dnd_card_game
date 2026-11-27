@@ -8,8 +8,9 @@ Wi-Fi LAN 回合制卡牌桌遊原型。專案依照附件規格建立，採用 
 - Client 用 `ws://host-ip:port` 加入。
 - 支援 `JOIN_ROOM`、`SET_CHARACTER`、`PLAYER_READY`、`CANCEL_READY`、`DRAW_CARD`、`PLAY_CARD`、`DISCARD_CARD`、`END_TURN`。
 - Host 驗證目前回合、手牌歸屬、卡牌 zone 與能量費用。
-- 玩家先加入房間，再於等待室完成角色設定：單選種族，分配 24 點到力量、敏捷、智力、感知、魅力、體質，Host 會驗證下限、種族創角上限與點數總額；ready 後與對戰開始後會鎖定角色設定。
+- 玩家先加入房間，再於等待室完成角色設定：單選種族，依序選擇職業、專長、武器、冒險技能並查看外部 catalog 帶入的來源牌，分配 24 點到力量、敏捷、智力、感知、魅力、體質；Host 會驗證下限、種族創角上限、點數總額與 loadout 來源，ready 後與對戰開始後會鎖定角色設定。
 - 種族資料可由外部 catalog 讀入，包含創角上限、升級上限、基礎 HP、天生護甲類型與護甲值。
+- 職業、專長、武器與冒險技能可由外部 catalog 定義來源牌；武器脫手時，對應來源牌會移到不可用牌堆，打出武器恢復卡後洗回牌庫。
 - Cloudflare Worker 提供 lobby API，可建立公開房、建立私有房、列出公開房，私有房不列在公開清單，需用房間代碼與密碼取得短效 join token 後才能連 WebSocket。
 - 支援無直接效果、傷害、治療、抽牌與外部規則觸發的手牌卡牌轉換。
 - 卡片定義包含施放目標規則，可區分自己、敵人單體、任意單體、隊友單體與未來群體目標。
@@ -83,12 +84,15 @@ Node host 可選擇讀取本機 CSV：
 ```txt
 data/cards.csv
 data/starter_deck.csv
+data/hidden_decks.csv
 data/transform_rules.csv
 data/races.csv
+data/loadout_sources.csv
+data/loadout_cards.csv
 ```
 
 這些 CSV 只是本機測試或上傳 Google Spreadsheet 時的暫存資料，`data/` 已加入 `.gitignore`，不是正式 runtime 依賴。若本機沒有 `cards.csv` 與 `starter_deck.csv`，Node host 會 fallback 到程式內建的 default catalog。`transform_rules.csv` 可省略。
-`races.csv` 可省略；省略時會使用程式內建的人類、地侏、獸人預設種族。
+`hidden_decks.csv` 可省略；省略時自然、知識、環境三個隱藏牌庫為空。`races.csv` 可省略；省略時會使用程式內建的人類、地侏、獸人預設種族。`loadout_sources.csv` 與 `loadout_cards.csv` 可省略；省略時不從外部追加職業/專長/武器/冒險技能來源牌。
 
 詳細流程請看：
 
@@ -137,14 +141,17 @@ KV binding: CARD_CATALOG_KV
 Variables:
   CARD_CARDS_CSV_URL=<published cards CSV URL>
   CARD_STARTER_DECK_CSV_URL=<published starter_deck CSV URL>
+  CARD_HIDDEN_DECKS_CSV_URL=<published hidden_decks CSV URL>
   CARD_TRANSFORM_RULES_CSV_URL=<published transform_rules CSV URL>
   CARD_RACES_CSV_URL=<published races CSV URL>
+  CARD_LOADOUT_SOURCES_CSV_URL=<published loadout_sources CSV URL>
+  CARD_LOADOUT_CARDS_CSV_URL=<published loadout_cards CSV URL>
   CARD_CATALOG_KEY=card-catalog:active
 Secret:
   CARD_CATALOG_ADMIN_TOKEN
 ```
 
-`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 transform rules URL 時代表沒有外部卡牌轉換規則，沒有 races URL 時使用內建種族，沒有 catalog key 時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
+`CARD_HIDDEN_DECKS_CSV_URL`、`CARD_TRANSFORM_RULES_CSV_URL`、`CARD_RACES_CSV_URL`、`CARD_LOADOUT_SOURCES_CSV_URL`、`CARD_LOADOUT_CARDS_CSV_URL` 與 `CARD_CATALOG_KEY` 可省略；沒有 hidden decks URL 時自然、知識、環境三個隱藏牌庫為空，沒有 transform rules URL 時代表沒有外部卡牌轉換規則，沒有 races URL 時使用內建種族，沒有 loadout URL 時不從外部追加職業/專長/武器/冒險技能來源牌，沒有 catalog key 時會使用 `card-catalog:active`。如果 CSV URL variables 是在 Cloudflare Dashboard 設定，使用 Wrangler 部署時請加上 `--keep-vars`，避免部署時清掉 Dashboard variables：
 
 ```bash
 npx wrangler deploy --keep-vars

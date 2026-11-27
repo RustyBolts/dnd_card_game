@@ -1,7 +1,8 @@
-import type { CardActionTagType, CardActionTrigger, CardDefinition } from "./card.js";
+import type { CardActionTagType, CardActionTrigger, CardDefinition, CardDrawPile } from "./card.js";
 import type { CardZone } from "./card.js";
 import type { CharacterConfig, RaceDefinition } from "./character.js";
 import type { PlayerState, VisibleGameState } from "./game.js";
+import type { LoadoutCardDefinition, LoadoutSourceDefinition, LoadoutSourceType } from "./loadout.js";
 
 export type NetworkMessage = {
   type: string;
@@ -131,6 +132,7 @@ export type CardDrawnEvent = {
   payload: {
     playerId: string;
     cardInstanceId: string;
+    sourcePile?: CardDrawPile;
     privateCardData?: {
       cardId: string;
     };
@@ -156,6 +158,18 @@ export type DeckRecycledEvent = {
   payload: {
     playerId: string;
     recycledCount: number;
+  };
+};
+
+export type CardCreatedEvent = {
+  type: "CARD_CREATED";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceId?: string;
+    cardInstanceId: string;
+    cardId: string;
+    destinationZone: CardZone;
   };
 };
 
@@ -284,6 +298,53 @@ export type CardTransformedEvent = {
   };
 };
 
+export type EquipmentDroppedEvent = {
+  type: "EQUIPMENT_DROPPED";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceId: string;
+    bindingId: string;
+    recoveryCardInstanceId?: string;
+  };
+};
+
+export type EquipmentReequippedEvent = {
+  type: "EQUIPMENT_REEQUIPPED";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceId: string;
+    bindingId: string;
+  };
+};
+
+export type LoadoutCardsSuppressedEvent = {
+  type: "LOADOUT_CARDS_SUPPRESSED";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceType: LoadoutSourceType;
+    sourceId: string;
+    bindingId: string;
+    cardCount: number;
+    destinationZone: CardZone;
+  };
+};
+
+export type LoadoutCardsRestoredEvent = {
+  type: "LOADOUT_CARDS_RESTORED";
+  seq: number;
+  payload: {
+    playerId: string;
+    sourceType: LoadoutSourceType;
+    sourceId: string;
+    bindingId: string;
+    cardCount: number;
+    destinationZone: CardZone;
+  };
+};
+
 export type DamageAppliedEvent = {
   type: "DAMAGE_APPLIED";
   seq: number;
@@ -350,6 +411,8 @@ export type GameStateSyncEvent = {
     state: VisibleGameState;
     cardDefinitions: Record<string, CardDefinition>;
     races: Record<string, RaceDefinition>;
+    loadoutSources: Record<string, LoadoutSourceDefinition>;
+    loadoutCards: LoadoutCardDefinition[];
     cardCatalogVersion: string;
   };
 };
@@ -373,6 +436,7 @@ export type GameEvent =
   | CardDrawnEvent
   | CardAddedToHandEvent
   | DeckRecycledEvent
+  | CardCreatedEvent
   | CardPlayedEvent
   | CardDiscardedEvent
   | CardConsumedEvent
@@ -383,6 +447,10 @@ export type GameEvent =
   | CardResolvedEvent
   | DiscardPhaseStartedEvent
   | CardTransformedEvent
+  | EquipmentDroppedEvent
+  | EquipmentReequippedEvent
+  | LoadoutCardsSuppressedEvent
+  | LoadoutCardsRestoredEvent
   | DamageAppliedEvent
   | DamagePreventedEvent
   | HealAppliedEvent
